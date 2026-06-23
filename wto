@@ -462,9 +462,8 @@ select_create_target() {
 create_main_worktree() {
 	base_dir=$1
 	bare=$(bare_dir "$base_dir")
-	name=$(base_name "$base_dir")
 	remote=$(default_branch "$base_dir")
-	local_branch=$name-main
+	local_branch=$remote
 	path=$(main_path "$base_dir")
 
 	[ ! -e "$path" ] || die "Path already exists: $path"
@@ -546,10 +545,12 @@ tmux_label() {
 	branch=$(branch_for_path "$base_dir" "$path")
 	name=$(base_name "$base_dir")
 
+	if [ "$path" = "$(main_path "$base_dir")" ]; then
+		printf '%s\t%s\n' 1 Main
+		return
+	fi
+
 	case $branch in
-		"$name-main")
-			printf '%s\t%s\n' 1 Main
-			;;
 		"$name-PR"*)
 			num=${branch#"$name-PR"}
 			printf '%s\tPR#%s\n' 2 "$num"
