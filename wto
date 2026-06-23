@@ -229,8 +229,8 @@ default_branch() {
 	base_dir=$1
 	bare=$(bare_dir "$base_dir")
 
-	if ref=$(git --git-dir="$bare" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
-		printf '%s\n' "${ref#origin/}"
+	if ref=$(git --git-dir="$bare" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null); then
+		printf '%s\n' "${ref#refs/remotes/origin/}"
 		return
 	fi
 
@@ -391,7 +391,7 @@ remote_branch_choices() {
 	fi
 
 	git --git-dir="$bare" for-each-ref --sort=-committerdate \
-		--format='%(committerdate:iso8601-strict)%09%(committerdate:short)%09%(refname:short)' refs/remotes/origin |
+		--format='%(committerdate:iso8601-strict)%09%(committerdate:short)%09%(refname)' refs/remotes/origin |
 	awk -F '	' -v pr_file="$pr_file" '
 		BEGIN {
 			while ((getline line < pr_file) > 0) {
@@ -413,7 +413,7 @@ remote_branch_choices() {
 			date = $2
 			branch = $3
 
-			sub("^origin/", "", branch)
+			sub("^refs/remotes/origin/", "", branch)
 			if (branch == "HEAD" || branch == "origin") {
 				next
 			}
