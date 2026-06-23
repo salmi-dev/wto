@@ -1,0 +1,894 @@
+#!/bin/sh
+
+set -eu
+
+PROGRAM=${0##*/}
+
+RESET=
+BOLD=
+DIM=
+RED=
+GREEN=
+YELLOW=
+BLUE=
+CYAN=
+MAGENTA=
+
+use_color=0
+case ${WTO_COLOR:-auto} in
+	always)
+		use_color=1
+		;;
+	never)
+		use_color=0
+		;;
+	*)
+		if [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+			use_color=1
+		fi
+		;;
+esac
+
+if [ "$use_color" = 1 ]; then
+	ESC=$(printf '\033')
+	RESET="${ESC}[0m"
+	BOLD="${ESC}[1m"
+	DIM="${ESC}[2m"
+	RED="${ESC}[31m"
+	GREEN="${ESC}[32m"
+	YELLOW="${ESC}[33m"
+	BLUE="${ESC}[34m"
+	CYAN="${ESC}[36m"
+	MAGENTA="${ESC}[35m"
+fi
+unset use_color
+
+style() {
+	printf '%s%s%s' "$1" "$2" "$RESET"
+}
+
+info() {
+	printf '%s %s\n' "$(style "$BLUE" "info")" "$*" >&2
+}
+
+success() {
+	printf '%s %s\n' "$(style "$GREEN" "ok")" "$*" >&2
+}
+
+warn() {
+	printf '%s %s\n' "$(style "$YELLOW" "warn")" "$*" >&2
+}
+
+usage() {
+	cat <<EOF
+${BOLD}wto${RESET} - Worktree Organizer
+
+ __      __  ______  ___
+ \ \ /\ / / |_  /  \/  |
+  \ V  V /   / /| |\/| |
+   \_/\_/   /___|_|  |_|
+
+${BOLD}Usage${RESET}:
+  $PROGRAM clone <git-url> [directory]
+  $PROGRAM create [#<pr-number>|<branch>|main]
+  $PROGRAM tmux
+  $PROGRAM close [#<pr-number>|<branch>|main]
+  $PROGRAM worktree create [#<pr-number>|<branch>|main]
+  $PROGRAM worktree tmux
+  $PROGRAM worktree close [#<pr-number>|<branch>|main]
+
+${BOLD}Structure${RESET}:
+  <repo>/.bare
+  <repo>/<repo>-main
+  <repo>/pr/<pr-branch>
+  <repo>/<ctx>/<name>       for two-part branches
+  <repo>/br/<branch>        for other branches
+EOF
+}
+
+die() {
+	printf '%s %s\n' "$(style "$RED" "error")" "$*" >&2
+	exit 1
+}
+
+need_cmd() {
+	command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1"
+}
+
+confirm() {
+	prompt=$1
+	default=${2:-n}
+
+	if [ "$default" = y ]; then
+		suffix='[Y/n]'
+	else
+		suffix='[y/N]'
+	fi
+
+	printf '%s %s ' "$(style "$BOLD" "$prompt")" "$(style "$DIM" "$suffix")" >&2
+	read -r answer || answer=
+
+	case $answer in
+		[Yy]|[Yy][Ee][Ss]) return 0 ;;
+		[Nn]|[Nn][Oo]) return 1 ;;
+		'')
+			[ "$default" = y ]
+			return
+			;;
+		*) return 1 ;;
+	esac
+}
+
+prompt_text() {
+	prompt=$1
+	default=${2:-}
+
+	if [ -n "$default" ]; then
+		printf '%s %s: ' "$(style "$BOLD" "$prompt")" "$(style "$DIM" "[$default]")" >&2
+	else
+		printf '%s: ' "$(style "$BOLD" "$prompt")" >&2
+	fi
+
+	read -r answer || answer=
+	if [ -n "$answer" ]; then
+		printf '%s\n' "$answer"
+	else
+		printf '%s\n' "$default"
+	fi
+}
+
+abs_dir() {
+	(cd "$1" 2>/dev/null && pwd -P) || return 1
+}
+
+find_base_dir() {
+	current=$(pwd -P)
+
+	while :; do
+		if [ -d "$current/.bare" ]; then
+			printf '%s\n' "$current"
+			return 0
+		fi
+
+		if [ "$current" = / ]; then
+			break
+		fi
+
+		current=${current%/*}
+		[ -n "$current" ] || current=/
+	done
+
+	if git_common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+		case $git_common in
+			*/.bare)
+				dir=${git_common%/.bare}
+				abs_dir "$dir"
+				return
+				;;
+			*/.bare/*)
+				dir=${git_common%%/.bare/*}
+				abs_dir "$dir"
+				return
+				;;
+		esac
+	fi
+
+	die "Run this inside a managed worktree or a directory containing .bare."
+}
+
+base_name() {
+	base_dir=$1
+	basename "$base_dir"
+}
+
+bare_dir() {
+	base_dir=$1
+	printf '%s/.bare\n' "$base_dir"
+}
+
+git_bare() {
+	base_dir=$(find_base_dir)
+	git --git-dir="$(bare_dir "$base_dir")" "$@"
+}
+
+gh_repo() {
+	base_dir=$1
+	bare=$(bare_dir "$base_dir")
+	url=$(git --git-dir="$bare" config --get remote.origin.url 2>/dev/null || true)
+
+	[ -n "$url" ] || return 1
+	url=${url%.git}
+
+	case $url in
+		git@*:*)
+			path=${url#*:}
+			;;
+		*://*)
+			path=${url#*://}
+			path=${path#*/}
+			;;
+		*/*)
+			path=$url
+			;;
+		*)
+			return 1
+			;;
+	esac
+
+	case $path in
+		*/*)
+			printf '%s\n' "$path"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+default_branch() {
+	base_dir=$1
+	bare=$(bare_dir "$base_dir")
+
+	if ref=$(git --git-dir="$bare" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
+		printf '%s\n' "${ref#origin/}"
+		return
+	fi
+
+	repo=$(gh_repo "$base_dir" || true)
+	if [ -n "$repo" ]; then
+		branch=$(gh repo view --repo "$repo" --json defaultBranchRef --template '{{.defaultBranchRef.name}}' 2>/dev/null || true)
+	else
+		branch=$(gh repo view --json defaultBranchRef --template '{{.defaultBranchRef.name}}' 2>/dev/null || true)
+	fi
+	if [ -n "$branch" ]; then
+		printf '%s\n' "$branch"
+		return
+	fi
+
+	if git --git-dir="$bare" show-ref --verify --quiet refs/remotes/origin/main; then
+		printf '%s\n' main
+		return
+	fi
+
+	if git --git-dir="$bare" show-ref --verify --quiet refs/remotes/origin/master; then
+		printf '%s\n' master
+		return
+	fi
+
+	die "Could not determine default branch."
+}
+
+sanitize_path_part() {
+	printf '%s\n' "$1" | sed 's#^\./##; s#//*#/#g; s#^/##; s#/$##'
+}
+
+branch_path() {
+	base_dir=$1
+	branch=$2
+
+	case $branch in
+		*/*/*)
+			printf '%s/br/%s\n' "$base_dir" "$(sanitize_path_part "$branch")"
+			;;
+		*/*)
+			ctx=${branch%%/*}
+			name=${branch#*/}
+			printf '%s/%s/%s\n' "$base_dir" "$ctx" "$name"
+			;;
+		*)
+			printf '%s/br/%s\n' "$base_dir" "$branch"
+			;;
+	esac
+}
+
+main_path() {
+	base_dir=$1
+	name=$(base_name "$base_dir")
+	printf '%s/%s-main\n' "$base_dir" "$name"
+}
+
+pr_path() {
+	base_dir=$1
+	head=$2
+	printf '%s/pr/%s\n' "$base_dir" "$(sanitize_path_part "$head")"
+}
+
+worktree_lines() {
+	base_dir=$1
+	bare=$(bare_dir "$base_dir")
+
+	git --git-dir="$bare" worktree list --porcelain |
+	awk '
+		/^worktree / {
+			if (path != "" && is_bare != 1) {
+				print path "\t" branch
+			}
+			path = substr($0, 10)
+			branch = ""
+			is_bare = 0
+		}
+		/^bare$/ {
+			is_bare = 1
+		}
+		/^branch / {
+			branch = substr($0, 8)
+			sub("^refs/heads/", "", branch)
+		}
+		END {
+			if (path != "" && is_bare != 1) {
+				print path "\t" branch
+			}
+		}
+	'
+}
+
+select_worktree() {
+	base_dir=$1
+	selector=${2:-}
+
+	if [ -n "$selector" ]; then
+		case $selector in
+			main)
+				path=$(main_path "$base_dir")
+				;;
+			\#*)
+				num=${selector#\#}
+				path=$(worktree_lines "$base_dir" | awk -F '\t' -v want="$(base_name "$base_dir")-PR$num" '$2 == want { print $1; exit }')
+				;;
+			*)
+				path=$(worktree_lines "$base_dir" | awk -F '\t' -v want="$selector" '$2 == want { print $1; exit }')
+				;;
+		esac
+
+		[ -n "${path:-}" ] || die "No matching worktree for: $selector"
+		printf '%s\n' "$path"
+		return
+	fi
+
+	need_cmd fzf
+	line=$(worktree_lines "$base_dir" | awk -F '\t' '{ label=$2; if (label == "") label="(bare)"; print $1 "\t" label }' | fzf --prompt='worktree> ') || die "No worktree selected."
+	printf '%s\n' "$line" | awk -F '\t' '{ print $1 }'
+}
+
+branch_for_path() {
+	base_dir=$1
+	path=$2
+
+	worktree_lines "$base_dir" | awk -F '\t' -v want="$path" '$1 == want { print $2; exit }'
+}
+
+tmux_session_for_path() {
+	path=$1
+	want=$(abs_dir "$path" || printf '%s\n' "$path")
+
+	command -v tmux >/dev/null 2>&1 || return 1
+
+	tmux list-sessions -F '#S	#{session_path}' 2>/dev/null |
+	while IFS='	' read -r session session_path; do
+		[ -n "$session_path" ] || continue
+		session_path=$(abs_dir "$session_path" 2>/dev/null || printf '%s\n' "$session_path")
+		if [ "$session_path" = "$want" ]; then
+			printf '%s\n' "$session"
+			break
+		fi
+	done
+}
+
+remote_branch_choices() {
+	base_dir=$1
+	bare=$(bare_dir "$base_dir")
+	pr_file=$(mktemp "${TMPDIR:-/tmp}/wto-prs.XXXXXX") || die "Could not create temp file."
+	repo=$(gh_repo "$base_dir" || true)
+
+	git --git-dir="$bare" fetch origin --prune >/dev/null 2>&1 || true
+
+	if [ -n "$repo" ]; then
+		gh pr list --repo "$repo" --state open --limit 100 --json number,headRefName,updatedAt \
+			--template '{{range .}}{{printf "%s\t%v\t%s\n" .headRefName .number .updatedAt}}{{end}}' >"$pr_file" 2>/dev/null || true
+	else
+		gh pr list --state open --limit 100 --json number,headRefName,updatedAt \
+			--template '{{range .}}{{printf "%s\t%v\t%s\n" .headRefName .number .updatedAt}}{{end}}' >"$pr_file" 2>/dev/null || true
+	fi
+
+	git --git-dir="$bare" for-each-ref --sort=-committerdate \
+		--format='%(committerdate:iso8601-strict)%09%(committerdate:short)%09%(refname:short)' refs/remotes/origin |
+	awk -F '	' -v pr_file="$pr_file" '
+		BEGIN {
+			while ((getline line < pr_file) > 0) {
+				split(line, fields, FS)
+				head = fields[1]
+				num = fields[2]
+				updated = fields[3]
+
+				if (head != "" && num != "") {
+					pr_num[head] = "#" num
+					pr_updated[head] = updated
+					pr_seen[head] = 1
+				}
+			}
+			close(pr_file)
+		}
+		{
+			key = $1
+			date = $2
+			branch = $3
+
+			sub("^origin/", "", branch)
+			if (branch == "HEAD" || branch == "origin") {
+				next
+			}
+
+			pr = "-"
+			if (branch in pr_num) {
+				pr = pr_num[branch]
+				pr_seen[branch] = 2
+			}
+
+			print key FS branch FS branch FS pr FS date
+		}
+		END {
+			for (head in pr_seen) {
+				if (pr_seen[head] == 1) {
+					key = pr_updated[head]
+					date = substr(key, 1, 10)
+					print key FS pr_num[head] FS head FS pr_num[head] FS date
+				}
+			}
+		}
+	' |
+	sort -r |
+	awk -F '	' -v reset="$RESET" -v cyan="$CYAN" -v magenta="$MAGENTA" -v dim="$DIM" '
+		{
+			pr_color = magenta
+			if ($4 == "-") {
+				pr_color = dim
+			}
+			printf "%s%-56s%s  %s%-8s%s  %s%-10s%s\t%s\n", cyan, $3, reset, pr_color, $4, reset, dim, $5, reset, $2
+		}
+	'
+
+	rm -f "$pr_file"
+}
+
+select_create_target() {
+	base_dir=$1
+	need_cmd fzf
+	header=$(printf '%s%-56s%s  %s%-8s%s  %s%-10s%s' "$BOLD" "target" "$RESET" "$BOLD" "PR" "$RESET" "$BOLD" "date" "$RESET")
+	remote_branch_choices "$base_dir" |
+		fzf --ansi --prompt='create> ' --header="$header" --delimiter='	' --with-nth=1 |
+		awk -F '	' '{ print $2 }'
+}
+
+create_main_worktree() {
+	base_dir=$1
+	bare=$(bare_dir "$base_dir")
+	name=$(base_name "$base_dir")
+	remote=$(default_branch "$base_dir")
+	local_branch=$name-main
+	path=$(main_path "$base_dir")
+
+	[ ! -e "$path" ] || die "Path already exists: $path"
+
+	git --git-dir="$bare" fetch origin "+refs/heads/$remote:refs/remotes/origin/$remote"
+
+	if git --git-dir="$bare" show-ref --verify --quiet "refs/heads/$local_branch"; then
+		git --git-dir="$bare" worktree add "$path" "$local_branch"
+	else
+		git --git-dir="$bare" worktree add -b "$local_branch" "$path" "origin/$remote"
+	fi
+}
+
+create_pr_worktree() {
+	base_dir=$1
+	num=$2
+	bare=$(bare_dir "$base_dir")
+	name=$(base_name "$base_dir")
+	local_branch=$name-PR$num
+
+	repo=$(gh_repo "$base_dir" || true)
+	if [ -n "$repo" ]; then
+		head=$(gh pr view "$num" --repo "$repo" --json headRefName --template '{{.headRefName}}' 2>/dev/null || true)
+	else
+		head=$(gh pr view "$num" --json headRefName --template '{{.headRefName}}' 2>/dev/null || true)
+	fi
+	[ -n "$head" ] || head=PR$num
+	path=$(pr_path "$base_dir" "$head")
+
+	[ ! -e "$path" ] || die "Path already exists: $path"
+
+	git --git-dir="$bare" fetch origin "+refs/pull/$num/head:refs/heads/$local_branch"
+	git --git-dir="$bare" worktree add "$path" "$local_branch"
+}
+
+create_branch_worktree() {
+	base_dir=$1
+	branch=$2
+	bare=$(bare_dir "$base_dir")
+	path=$(branch_path "$base_dir" "$branch")
+
+	[ ! -e "$path" ] || die "Path already exists: $path"
+
+	git --git-dir="$bare" fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+
+	if git --git-dir="$bare" show-ref --verify --quiet "refs/heads/$branch"; then
+		git --git-dir="$bare" worktree add "$path" "$branch"
+	else
+		git --git-dir="$bare" worktree add -b "$branch" "$path" "origin/$branch"
+	fi
+}
+
+next_tmux_number() {
+	class=$1
+	start=$2
+
+	if command -v tmux >/dev/null 2>&1; then
+		max=$(tmux list-sessions -F '#S' 2>/dev/null |
+			awk -F '|' -v class="$class" -v start="$start" '
+				$1 ~ "^[[:space:]]*" class "[0-9][0-9][[:space:]]*$" {
+					n = $1 + 0
+					if (n > max) max = n
+				}
+				END {
+					if (max == 0) print start
+					else print max + 1
+				}
+			')
+	else
+		max=$start
+	fi
+
+	printf '%s\n' "$max"
+}
+
+tmux_label() {
+	base_dir=$1
+	path=$2
+	branch=$(branch_for_path "$base_dir" "$path")
+	name=$(base_name "$base_dir")
+
+	case $branch in
+		"$name-main")
+			printf '%s\t%s\n' 1 Main
+			;;
+		"$name-PR"*)
+			num=${branch#"$name-PR"}
+			printf '%s\tPR#%s\n' 2 "$num"
+			;;
+		*)
+			if [ -n "$branch" ]; then
+				printf '%s\t%s\n' 2 "$branch"
+			else
+				printf '%s\t%s\n' 2 "$(basename "$path")"
+			fi
+			;;
+	esac
+}
+
+switch_tmux_session() {
+	session=$1
+
+	info "tmux session: $(style "$BOLD" "$session")"
+
+	if [ -n "${TMUX:-}" ]; then
+		tmux switch-client -t "$session"
+	else
+		tmux attach-session -t "$session"
+	fi
+}
+
+start_tmux_for_path() {
+	base_dir=$1
+	path=$2
+
+	need_cmd tmux
+	[ -d "$path" ] || die "Not a directory: $path"
+
+	if session=$(tmux_session_for_path "$path"); then
+		if [ -n "$session" ]; then
+			switch_tmux_session "$session"
+			return
+		fi
+	fi
+
+	label_line=$(tmux_label "$base_dir" "$path")
+	class=$(printf '%s\n' "$label_line" | awk -F '\t' '{ print $1 }')
+	label=$(printf '%s\n' "$label_line" | awk -F '\t' '{ print $2 }')
+
+	if [ "$class" = 1 ]; then
+		num=$(next_tmux_number 1 100)
+	else
+		num=$(next_tmux_number 2 200)
+	fi
+
+	session="$num| $(base_name "$base_dir") | $label"
+
+	if tmux has-session -t "$session" 2>/dev/null; then
+		:
+	else
+		tmux new-session -d -s "$session" -c "$path"
+	fi
+
+	switch_tmux_session "$session"
+}
+
+tmux_choices() {
+	base_dir=$1
+	seen_file=$(mktemp "${TMPDIR:-/tmp}/wto-tmux-seen.XXXXXX") || die "Could not create temp file."
+
+	if command -v tmux >/dev/null 2>&1; then
+		tmux list-sessions -F '#S	#{session_path}' 2>/dev/null |
+		while IFS='	' read -r session session_path; do
+			[ -n "$session_path" ] || continue
+			session_path=$(abs_dir "$session_path" 2>/dev/null || printf '%s\n' "$session_path")
+			case $session_path in
+				"$base_dir"|"$base_dir"/*)
+					printf "%s%-10s%s  %s%-36s%s  %s%s%s\t%s\t%s\n" "$GREEN" "session" "$RESET" "$CYAN" "$session" "$RESET" "$DIM" "$session_path" "$RESET" "session" "$session"
+					printf '%s\n' "$session_path" >>"$seen_file"
+					;;
+			esac
+		done
+	fi
+
+	worktree_lines "$base_dir" |
+	awk -F '	' -v seen_file="$seen_file" -v reset="$RESET" -v blue="$BLUE" -v cyan="$CYAN" -v dim="$DIM" '
+		BEGIN {
+			while ((getline path < seen_file) > 0) {
+				seen[path] = 1
+			}
+			close(seen_file)
+		}
+		{
+			path = $1
+			branch = $2
+			if (path in seen) {
+				next
+			}
+			if (branch == "") {
+				branch = "(detached)"
+			}
+			printf "%s%-10s%s  %s%-36s%s  %s%s%s\t%s\t%s\n", blue, "worktree", reset, cyan, branch, reset, dim, path, reset, "worktree", path
+		}
+	'
+
+	rm -f "$seen_file"
+}
+
+select_tmux_target() {
+	base_dir=$1
+
+	need_cmd fzf
+	header=$(printf '%s%-10s%s  %s%-36s%s  %s' "$BOLD" "kind" "$RESET" "$BOLD" "name" "$RESET" "$(style "$BOLD" "path")")
+	line=$(tmux_choices "$base_dir" | fzf --ansi --prompt='tmux> ' --header="$header" --delimiter='	' --with-nth=1) || die "No tmux target selected."
+	printf '%s\n' "$line" | awk -F '	' '{ print $2 "\t" $3 }'
+}
+
+kill_tmux_for_path() {
+	path=$1
+	want=$(abs_dir "$path" || printf '%s\n' "$path")
+
+	command -v tmux >/dev/null 2>&1 || return 0
+
+	tmux list-sessions -F '#S	#{session_path}' 2>/dev/null |
+	while IFS='	' read -r session session_path; do
+		[ -n "$session_path" ] || continue
+		session_path=$(abs_dir "$session_path" 2>/dev/null || printf '%s\n' "$session_path")
+		if [ "$session_path" = "$want" ]; then
+			tmux kill-session -t "$session" 2>/dev/null || true
+		fi
+	done
+}
+
+has_uncommitted_changes() {
+	path=$1
+	[ -n "$(git -C "$path" status --porcelain)" ]
+}
+
+unpushed_status() {
+	path=$1
+
+	if upstream=$(git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null); then
+		count=$(git -C "$path" rev-list --count "$upstream..HEAD" 2>/dev/null || printf '0')
+		if [ "$count" != 0 ]; then
+			printf 'Branch has %s commit(s) not pushed to %s.\n' "$count" "$upstream"
+			return 0
+		fi
+		return 1
+	fi
+
+	printf 'Branch has no upstream configured; unpushed commits cannot be ruled out.\n'
+	return 0
+}
+
+cmd_clone() {
+	need_cmd git
+
+	repo=${1:-}
+	[ -n "$repo" ] || die "Missing git URL."
+
+	default_name=${repo##*/}
+	default_name=${default_name%.git}
+	target=${2:-}
+
+	if [ -z "$target" ]; then
+		target=$(prompt_text "Directory/basedir" "$default_name")
+	fi
+
+	[ -n "$target" ] || die "Directory is required."
+	[ ! -e "$target" ] || die "Path already exists: $target"
+
+	mkdir -p "$target"
+	base_dir=$(abs_dir "$target")
+
+	info "cloning $repo"
+	git clone --bare "$repo" "$base_dir/.bare"
+	git --git-dir="$base_dir/.bare" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+	git --git-dir="$base_dir/.bare" fetch origin --prune
+	git --git-dir="$base_dir/.bare" for-each-ref --format='%(refname)' refs/heads |
+	while read -r ref; do
+		git --git-dir="$base_dir/.bare" update-ref -d "$ref"
+	done
+	git --git-dir="$base_dir/.bare" remote set-head origin -a >/dev/null 2>&1 || true
+
+	success "bare repository created at $(style "$BOLD" "$base_dir/.bare")"
+
+	if confirm "Create main worktree now?" y; then
+		create_main_worktree "$base_dir"
+	fi
+}
+
+cmd_create() {
+	need_cmd git
+	need_cmd gh
+
+	base_dir=$(find_base_dir)
+	target=${1:-}
+	if [ -z "$target" ]; then
+		target=$(select_create_target "$base_dir")
+	fi
+
+	[ -n "$target" ] || die "No target selected."
+
+	case $target in
+		main)
+			create_main_worktree "$base_dir"
+			created_path=$(main_path "$base_dir")
+			;;
+		\#*)
+			num=${target#\#}
+			case $num in *[!0-9]*|'') die "Invalid PR selector: $target" ;; esac
+			create_pr_worktree "$base_dir" "$num"
+			created_path=$(worktree_lines "$base_dir" | awk -F '\t' -v want="$(base_name "$base_dir")-PR$num" '$2 == want { print $1; exit }')
+			;;
+		*)
+			create_branch_worktree "$base_dir" "$target"
+			created_path=$(branch_path "$base_dir" "$target")
+			;;
+	esac
+
+	success "worktree created at $(style "$BOLD" "$created_path")"
+
+	if confirm "Create tmux session for this worktree?" n; then
+		start_tmux_for_path "$base_dir" "$created_path"
+	fi
+}
+
+cmd_tmux() {
+	base_dir=$(find_base_dir)
+
+	if [ -n "${1:-}" ]; then
+		path=$(select_worktree "$base_dir" "$1")
+		start_tmux_for_path "$base_dir" "$path"
+		return
+	fi
+
+	target=$(select_tmux_target "$base_dir")
+	kind=$(printf '%s\n' "$target" | awk -F '	' '{ print $1 }')
+	value=$(printf '%s\n' "$target" | awk -F '	' '{ print $2 }')
+
+	case $kind in
+		session)
+			switch_tmux_session "$value"
+			;;
+		worktree)
+			start_tmux_for_path "$base_dir" "$value"
+			;;
+		*)
+			die "Invalid tmux target."
+			;;
+	esac
+}
+
+cmd_close() {
+	need_cmd git
+
+	base_dir=$(find_base_dir)
+	bare=$(bare_dir "$base_dir")
+	path=$(select_worktree "$base_dir" "${1:-}")
+	branch=$(branch_for_path "$base_dir" "$path")
+	force=
+	risky=0
+
+	[ -d "$path" ] || die "Worktree path does not exist: $path"
+
+	if has_uncommitted_changes "$path"; then
+		warn "worktree has uncommitted changes"
+		force=--force
+		risky=1
+	fi
+
+	if status=$(unpushed_status "$path"); then
+		warn "$status"
+		risky=1
+	fi
+
+	if [ "$risky" = 1 ]; then
+		confirm "Abandon this worktree anyway?" n || die "Close aborted."
+	fi
+
+	kill_tmux_for_path "$path"
+	git --git-dir="$bare" worktree remove ${force:+"$force"} "$path"
+	success "worktree removed from $(style "$BOLD" "$path")"
+
+	case $branch in
+		''|'detached') ;;
+		*)
+			if git --git-dir="$bare" show-ref --verify --quiet "refs/heads/$branch"; then
+				git --git-dir="$bare" branch -D "$branch"
+				success "local branch deleted: $(style "$BOLD" "$branch")"
+			fi
+			;;
+	esac
+}
+
+main() {
+	cmd=${1:-}
+	case $cmd in
+		-h|--help|'')
+			usage
+			;;
+		clone)
+			shift
+			cmd_clone "$@"
+			;;
+		create)
+			shift
+			cmd_create "$@"
+			;;
+		tmux)
+			shift
+			cmd_tmux "$@"
+			;;
+		close)
+			shift
+			cmd_close "$@"
+			;;
+		worktree)
+			shift
+			sub=${1:-}
+			case $sub in
+				create)
+					shift
+					cmd_create "$@"
+					;;
+				tmux)
+					shift
+					cmd_tmux "$@"
+					;;
+				close)
+					shift
+					cmd_close "$@"
+					;;
+				*)
+					usage
+					exit 1
+					;;
+			esac
+			;;
+		*)
+			usage
+			exit 1
+			;;
+	esac
+}
+
+main "$@"
