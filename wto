@@ -100,8 +100,31 @@ ${BOLD}Structure${RESET}:
 EOF
 }
 
+usage_hint() {
+	cat >&2 <<EOF
+${BOLD}Usage${RESET}: $PROGRAM <command> [options]
+
+${BOLD}Commands${RESET}: clone, new, create, tmux, version, close
+${BOLD}Worktree${RESET}: $PROGRAM worktree <new|create|tmux|version|close>
+
+Run '$PROGRAM --help' for full usage.
+EOF
+}
+
 die() {
 	printf '%s %s\n' "$(style "$RED" "error")" "$*" >&2
+	exit 1
+}
+
+invalid_command() {
+	printf '%s %s\n' "$(style "$RED" "error")" "Unknown command: $(style "$BOLD" "$1")" >&2
+	usage_hint
+	exit 1
+}
+
+invalid_worktree_command() {
+	printf '%s %s\n' "$(style "$RED" "error")" "Unknown worktree command: $(style "$BOLD" "$1")" >&2
+	usage_hint
 	exit 1
 }
 
@@ -1033,14 +1056,12 @@ main() {
 					cmd_close "$@"
 					;;
 				*)
-					usage
-					exit 1
+					invalid_worktree_command "${sub:-<missing>}"
 					;;
 			esac
 			;;
 		*)
-			usage
-			exit 1
+			invalid_command "$cmd"
 			;;
 	esac
 }
