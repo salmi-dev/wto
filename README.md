@@ -1,5 +1,10 @@
 # WorkTree Organizer
 
+[![CI](https://github.com/salmi-dev/wto/actions/workflows/ci.yml/badge.svg)](https://github.com/salmi-dev/wto/actions/workflows/ci.yml)
+[![Auto Release](https://github.com/salmi-dev/wto/actions/workflows/auto-release.yml/badge.svg)](https://github.com/salmi-dev/wto/actions/workflows/auto-release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/salmi-dev/wto?label=release)](https://github.com/salmi-dev/wto/releases/latest)
+![POSIX sh](https://img.shields.io/badge/POSIX-sh-4EAA25)
+
 `wto` is a POSIX `sh` script for managing GitHub repositories cloned as a bare
 repository with sibling worktrees.
 
