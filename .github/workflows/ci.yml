@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  shell:
+    name: Shell validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Validate shell syntax
+        run: sh -n wto
+
+      - name: Run ShellCheck
+        run: shellcheck wto
+
+      - name: Smoke test commands
+        run: |
+          WTO_COLOR=never ./wto --help
+          WTO_COLOR=never ./wto version

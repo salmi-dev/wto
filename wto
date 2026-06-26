@@ -3,6 +3,7 @@
 set -eu
 
 PROGRAM=${0##*/}
+VERSION=0.1.0
 
 RESET=
 BOLD=
@@ -47,6 +48,18 @@ style() {
 	printf '%s%s%s' "$1" "$2" "$RESET"
 }
 
+banner() {
+	cat <<EOF
+
+$(style "$CYAN" '██╗    ██╗████████╗') $(style "$GREEN" '██████╗')
+$(style "$CYAN" '██║    ██║╚══██╔══╝')$(style "$GREEN" '██╔═══██╗')
+$(style "$CYAN" '██║ █╗ ██║   ██║   ')$(style "$GREEN" '██║   ██║')
+$(style "$CYAN" '██║███╗██║   ██║   ')$(style "$GREEN" '██║   ██║')
+$(style "$CYAN" '╚███╔███╔╝   ██║   ')$(style "$GREEN" '╚██████╔╝')
+$(style "$CYAN" ' ╚══╝╚══╝    ╚═╝   ')$(style "$GREEN" ' ╚═════╝')
+EOF
+}
+
 info() {
 	printf '%s %s\n' "$(style "$BLUE" "info")" "$*" >&2
 }
@@ -61,22 +74,21 @@ warn() {
 
 usage() {
 	cat <<EOF
-${BOLD}wto${RESET} - Worktree Organizer
+$(banner)
 
- __      __  ______  ___
- \ \ /\ / / |_  /  \/  |
-  \ V  V /   / /| |\/| |
-   \_/\_/   /___|_|  |_|
+${BOLD}wto${RESET} ${DIM}v$VERSION${RESET} - WorkTree Organizer
 
 ${BOLD}Usage${RESET}:
   $PROGRAM clone <git-url> [directory]
   $PROGRAM new <branch>
   $PROGRAM create [#<pr-number>|<branch>|main]
   $PROGRAM tmux
+  $PROGRAM version
   $PROGRAM close [#<pr-number>|<branch>|main]
   $PROGRAM worktree new <branch>
   $PROGRAM worktree create [#<pr-number>|<branch>|main]
   $PROGRAM worktree tmux
+  $PROGRAM worktree version
   $PROGRAM worktree close [#<pr-number>|<branch>|main]
 
 ${BOLD}Structure${RESET}:
@@ -95,6 +107,46 @@ die() {
 
 need_cmd() {
 	command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1"
+}
+
+command_version() {
+	case $1 in
+		git)
+			git --version 2>/dev/null
+			;;
+		gh)
+			gh --version 2>/dev/null | sed -n '1p'
+			;;
+		fzf)
+			fzf --version 2>/dev/null
+			;;
+		tmux)
+			tmux -V 2>/dev/null
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+dependency_line() {
+	name=$1
+	required=$2
+	name_column=$(printf '%-5s' "$name")
+
+	if command -v "$name" >/dev/null 2>&1; then
+		path=$(command -v "$name")
+		version=$(command_version "$name" || true)
+		[ -n "$version" ] || version=unknown
+		printf '  %s %s %s %s\n' "$(style "$GREEN" "✓")" "$(style "$CYAN" "$name_column")" "$version" "$(style "$DIM" "($path)")"
+		return
+	fi
+
+	if [ "$required" = required ]; then
+		printf '  %s %s %s\n' "$(style "$RED" "✗")" "$(style "$CYAN" "$name_column")" "required"
+	else
+		printf '  %s %s %s\n' "$(style "$YELLOW" "○")" "$(style "$CYAN" "$name_column")" "optional"
+	fi
 }
 
 confirm() {
@@ -820,6 +872,22 @@ cmd_new() {
 	fi
 }
 
+cmd_version() {
+	if [ ! -t 1 ]; then
+		printf '%s\n' "$VERSION"
+		return
+	fi
+
+	banner
+	printf '\n'
+	printf '%s %s\n' "$(style "$BOLD" "wto")" "v$VERSION"
+	printf '%s\n' "$(style "$BOLD" "dependencies")"
+	dependency_line git required
+	dependency_line gh required
+	dependency_line fzf required
+	dependency_line tmux optional
+}
+
 cmd_tmux() {
 	base_dir=$(find_base_dir)
 
@@ -894,6 +962,10 @@ main() {
 		-h|--help|'')
 			usage
 			;;
+		-v|--version)
+			shift
+			cmd_version "$@"
+			;;
 		clone)
 			shift
 			cmd_clone "$@"
@@ -909,6 +981,10 @@ main() {
 		tmux)
 			shift
 			cmd_tmux "$@"
+			;;
+		version)
+			shift
+			cmd_version "$@"
 			;;
 		close)
 			shift
@@ -929,6 +1005,10 @@ main() {
 				tmux)
 					shift
 					cmd_tmux "$@"
+					;;
+				version)
+					shift
+					cmd_version "$@"
 					;;
 				close)
 					shift

@@ -1,4 +1,4 @@
-# Worktree Organizer
+# WorkTree Organizer
 
 `wto` is a POSIX `sh` script for managing GitHub repositories cloned as a bare
 repository with sibling worktrees.
@@ -48,6 +48,7 @@ Rules:
 ./wto new <branch-name>
 ./wto create [#123|branch-name|main]
 ./wto tmux
+./wto version
 ./wto close [#123|branch-name|main]
 ```
 
@@ -57,6 +58,7 @@ The `worktree` namespace is also supported:
 ./wto worktree new <branch-name>
 ./wto worktree create [#123|branch-name|main]
 ./wto worktree tmux
+./wto worktree version
 ./wto worktree close [#123|branch-name|main]
 ```
 
@@ -85,6 +87,38 @@ session. Selecting a session switches or attaches to it directly. Selecting a
 worktree creates a session only when one does not already exist for that
 worktree path.
 
+## Version
+
+`wto` follows SemVer and starts at `0.1.0`. The script carries its version in
+the `VERSION` variable.
+
+```sh
+./wto version
+./wto --version
+```
+
+In a terminal, the command prints the `wto` banner and version, then checks
+dependency availability and versions for `git`, `gh`, `fzf`, and optional
+`tmux`. When stdout is piped or redirected, it prints only the version number.
+
+## CI/CD
+
+GitHub Actions runs shell validation on pushes to `main` and pull requests:
+
+- `sh -n wto`
+- `shellcheck wto`
+- smoke checks for `./wto --help` and `./wto version`
+
+Releases are tag-based. Push a SemVer tag matching the script version:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow validates that the tag matches `VERSION` and then uses
+`gh release create` to publish a GitHub release with `wto` attached.
+
 ## Output Styling
 
 `wto` uses color to improve scanability:
@@ -92,6 +126,10 @@ worktree path.
 - `info`, `ok`, `warn`, and `error` prefixes identify message severity.
 - Prompts highlight the question and dim the default choice.
 - The `create` picker highlights target, PR, and date columns.
+- The help and version banner color `WT` as WorkTree and `O` as Organizer when
+  enabled.
+- The version dependency report uses colored status glyphs and dependency names
+  when enabled.
 
 Color follows the `NO_COLOR` convention by default. Use:
 

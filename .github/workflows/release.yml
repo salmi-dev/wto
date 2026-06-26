@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: GitHub release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate SemVer tag
+        run: |
+          version=$(sed -n 's/^VERSION=//p' wto)
+          test -n "$version"
+          test "$GITHUB_REF_NAME" = "v$version"
+          printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+
+      - name: Create release with gh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^VERSION=//p' wto)
+          gh release create "$GITHUB_REF_NAME" \
+            ./wto \
+            --title "wto v$version" \
+            --notes "Release $GITHUB_REF_NAME"
