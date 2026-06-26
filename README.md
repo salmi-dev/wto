@@ -116,7 +116,12 @@ Run the same test suite locally with:
 bats test
 ```
 
-Releases are tag-based. Push a SemVer tag matching the script version:
+After CI succeeds on a push to `main`, the auto-release workflow bumps the patch
+version in `wto`, commits the bump, tags it, pushes the tag, and creates a
+GitHub release with `gh`.
+
+Manual releases are also tag-based. Push a SemVer tag matching the script
+version:
 
 ```sh
 git tag v0.1.0

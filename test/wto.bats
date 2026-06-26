@@ -3,20 +3,21 @@
 setup() {
 	REPO_ROOT=$(cd "$BATS_TEST_DIRNAME/.." && pwd -P)
 	WTO="$REPO_ROOT/wto"
+	VERSION=$(sed -n 's/^VERSION=//p' "$WTO")
 }
 
 @test "version prints only semver when stdout is not a terminal" {
 	run "$WTO" version
 
 	[ "$status" -eq 0 ]
-	[ "$output" = "0.1.0" ]
+	[ "$output" = "$VERSION" ]
 }
 
 @test "--version prints only semver when stdout is not a terminal" {
 	run "$WTO" --version
 
 	[ "$status" -eq 0 ]
-	[ "$output" = "0.1.0" ]
+	[ "$output" = "$VERSION" ]
 }
 
 @test "help includes banner, version, and commands" {
@@ -24,7 +25,7 @@ setup() {
 
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"██╗    ██╗████████╗ ██████╗"* ]]
-	[[ "$output" == *"wto v0.1.0 - WorkTree Organizer"* ]]
+	[[ "$output" == *"wto v$VERSION - WorkTree Organizer"* ]]
 	[[ "$output" == *"wto new <branch>"* ]]
 	[[ "$output" == *"wto worktree version"* ]]
 }
