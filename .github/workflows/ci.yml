@@ -15,10 +15,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install ShellCheck
+      - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck
+          sudo apt-get install -y bats shellcheck
 
       - name: Validate shell syntax
         run: sh -n wto
@@ -30,3 +30,6 @@ jobs:
         run: |
           WTO_COLOR=never ./wto --help
           WTO_COLOR=never ./wto version
+
+      - name: Run Bats tests
+        run: bats test

@@ -107,7 +107,14 @@ GitHub Actions runs shell validation on pushes to `main` and pull requests:
 
 - `sh -n wto`
 - `shellcheck wto`
+- `bats test`
 - smoke checks for `./wto --help` and `./wto version`
+
+Run the same test suite locally with:
+
+```sh
+bats test
+```
 
 Releases are tag-based. Push a SemVer tag matching the script version:
 
