@@ -1,6 +1,17 @@
 name: Auto Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      part:
+        description: SemVer part to bump
+        required: true
+        default: minor
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
   workflow_run:
     workflows:
       - CI
@@ -15,13 +26,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  patch:
-    name: Bump patch and release
+  release:
+    name: Bump version and release
     if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      !startsWith(github.event.workflow_run.display_title, 'chore(release):')
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        !startsWith(github.event.workflow_run.display_title, 'chore(release):')
+      )
     runs-on: ubuntu-latest
 
     steps:
@@ -36,13 +50,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Bump patch version
+      - name: Bump version
         id: bump
         env:
           CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          BUMP_PART: ${{ github.event_name == 'workflow_dispatch' && inputs.part || 'patch' }}
         run: |
           current_sha=$(git rev-parse HEAD)
-          if [ "$current_sha" != "$CI_HEAD_SHA" ]; then
+          if [ -n "$CI_HEAD_SHA" ] && [ "$current_sha" != "$CI_HEAD_SHA" ]; then
             echo "main moved from $CI_HEAD_SHA to $current_sha; skipping release."
             echo "released=false" >>"$GITHUB_OUTPUT"
             exit 0
@@ -56,7 +71,22 @@ jobs:
           rest=${version#*.}
           minor=${rest%%.*}
           patch=${version##*.}
-          next="$major.$minor.$((patch + 1))"
+
+          case "$BUMP_PART" in
+            major)
+              next="$((major + 1)).0.0"
+              ;;
+            minor)
+              next="$major.$((minor + 1)).0"
+              ;;
+            patch)
+              next="$major.$minor.$((patch + 1))"
+              ;;
+            *)
+              echo "Invalid bump part: $BUMP_PART"
+              exit 1
+              ;;
+          esac
           tag="v$next"
 
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then

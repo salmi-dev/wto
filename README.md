@@ -120,6 +120,10 @@ After CI succeeds on a push to `main`, the auto-release workflow bumps the patch
 version in `wto`, commits the bump, tags it, pushes the tag, and creates a
 GitHub release with `gh`.
 
+The auto-release workflow can also be run manually from GitHub Actions. Choose
+the SemVer part to bump: `major`, `minor`, or `patch`. The manual default is
+`minor`.
+
 Manual releases are also tag-based. Push a SemVer tag matching the script
 version:
 
