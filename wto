@@ -106,7 +106,19 @@ die() {
 }
 
 need_cmd() {
-	command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1"
+	command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1. Run '$PROGRAM version' to check dependencies."
+}
+
+run_step() {
+	action=$1
+	shift
+
+	if "$@"; then
+		return 0
+	else
+		status=$?
+		die "Failed to $action (exit $status)."
+	fi
 }
 
 command_version() {
@@ -522,12 +534,12 @@ create_main_worktree() {
 
 	[ ! -e "$path" ] || die "Path already exists: $path"
 
-	git --git-dir="$bare" fetch origin "+refs/heads/$remote:refs/remotes/origin/$remote"
+	run_step "fetch default branch '$remote' from origin" git --git-dir="$bare" fetch origin "+refs/heads/$remote:refs/remotes/origin/$remote"
 
 	if git --git-dir="$bare" show-ref --verify --quiet "refs/heads/$local_branch"; then
-		git --git-dir="$bare" worktree add "$path" "$local_branch"
+		run_step "create main worktree at '$path'" git --git-dir="$bare" worktree add "$path" "$local_branch"
 	else
-		git --git-dir="$bare" worktree add -b "$local_branch" "$path" "origin/$remote"
+		run_step "create main worktree at '$path' from origin/$remote" git --git-dir="$bare" worktree add -b "$local_branch" "$path" "origin/$remote"
 	fi
 }
 
@@ -549,8 +561,8 @@ create_pr_worktree() {
 
 	[ ! -e "$path" ] || die "Path already exists: $path"
 
-	git --git-dir="$bare" fetch origin "+refs/pull/$num/head:refs/heads/$local_branch"
-	git --git-dir="$bare" worktree add "$path" "$local_branch"
+	run_step "fetch PR #$num into local branch '$local_branch'" git --git-dir="$bare" fetch origin "+refs/pull/$num/head:refs/heads/$local_branch"
+	run_step "create PR #$num worktree at '$path'" git --git-dir="$bare" worktree add "$path" "$local_branch"
 }
 
 create_branch_worktree() {
@@ -561,12 +573,12 @@ create_branch_worktree() {
 
 	[ ! -e "$path" ] || die "Path already exists: $path"
 
-	git --git-dir="$bare" fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+	run_step "fetch branch '$branch' from origin" git --git-dir="$bare" fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
 
 	if git --git-dir="$bare" show-ref --verify --quiet "refs/heads/$branch"; then
-		git --git-dir="$bare" worktree add "$path" "$branch"
+		run_step "create worktree at '$path' for branch '$branch'" git --git-dir="$bare" worktree add "$path" "$branch"
 	else
-		git --git-dir="$bare" worktree add -b "$branch" "$path" "origin/$branch"
+		run_step "create worktree at '$path' from origin/$branch" git --git-dir="$bare" worktree add -b "$branch" "$path" "origin/$branch"
 	fi
 }
 
@@ -588,9 +600,9 @@ create_new_branch_worktree() {
 		die "Remote branch already exists: $branch"
 	fi
 
-	git --git-dir="$bare" fetch origin "+refs/heads/$remote:refs/remotes/origin/$remote"
-	git --git-dir="$bare" worktree add -b "$branch" "$path" "origin/$remote"
-	git -C "$path" push -u origin "$branch"
+	run_step "fetch default branch '$remote' from origin" git --git-dir="$bare" fetch origin "+refs/heads/$remote:refs/remotes/origin/$remote"
+	run_step "create new branch '$branch' worktree at '$path'" git --git-dir="$bare" worktree add -b "$branch" "$path" "origin/$remote"
+	run_step "push new branch '$branch' to origin" git -C "$path" push -u origin "$branch"
 }
 
 next_tmux_number() {
@@ -648,9 +660,9 @@ switch_tmux_session() {
 	info "tmux session: $(style "$BOLD" "$session")"
 
 	if [ -n "${TMUX:-}" ]; then
-		tmux switch-client -t "$session"
+		run_step "switch to tmux session '$session'" tmux switch-client -t "$session"
 	else
-		tmux attach-session -t "$session"
+		run_step "attach to tmux session '$session'" tmux attach-session -t "$session"
 	fi
 }
 
@@ -683,7 +695,7 @@ start_tmux_for_path() {
 	if tmux has-session -t "$session" 2>/dev/null; then
 		:
 	else
-		tmux new-session -d -s "$session" -c "$path"
+		run_step "create tmux session '$session'" tmux new-session -d -s "$session" -c "$path"
 	fi
 
 	switch_tmux_session "$session"
@@ -794,16 +806,18 @@ cmd_clone() {
 	[ -n "$target" ] || die "Directory is required."
 	[ ! -e "$target" ] || die "Path already exists: $target"
 
-	mkdir -p "$target"
+	run_step "create target directory '$target'" mkdir -p "$target"
 	base_dir=$(abs_dir "$target")
 
 	info "cloning $repo"
-	git clone --bare "$repo" "$base_dir/.bare"
-	git --git-dir="$base_dir/.bare" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
-	git --git-dir="$base_dir/.bare" fetch origin --prune
-	git --git-dir="$base_dir/.bare" for-each-ref --format='%(refname)' refs/heads |
+	run_step "clone bare repository into '$base_dir/.bare'" git clone --bare "$repo" "$base_dir/.bare"
+	run_step "configure origin fetch refspec" git --git-dir="$base_dir/.bare" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+	run_step "fetch origin branches" git --git-dir="$base_dir/.bare" fetch origin --prune
+	refs=$(git --git-dir="$base_dir/.bare" for-each-ref --format='%(refname)' refs/heads) || die "Failed to list local bare refs."
+	printf '%s\n' "$refs" |
 	while read -r ref; do
-		git --git-dir="$base_dir/.bare" update-ref -d "$ref"
+		[ -n "$ref" ] || continue
+		run_step "delete local bare ref '$ref'" git --git-dir="$base_dir/.bare" update-ref -d "$ref"
 	done
 	git --git-dir="$base_dir/.bare" remote set-head origin -a >/dev/null 2>&1 || true
 
@@ -942,14 +956,18 @@ cmd_close() {
 	fi
 
 	kill_tmux_for_path "$path"
-	git --git-dir="$bare" worktree remove ${force:+"$force"} "$path"
+	if [ -n "$force" ]; then
+		run_step "remove worktree at '$path'" git --git-dir="$bare" worktree remove "$force" "$path"
+	else
+		run_step "remove worktree at '$path'" git --git-dir="$bare" worktree remove "$path"
+	fi
 	success "worktree removed from $(style "$BOLD" "$path")"
 
 	case $branch in
 		''|'detached') ;;
 		*)
 			if git --git-dir="$bare" show-ref --verify --quiet "refs/heads/$branch"; then
-				git --git-dir="$bare" branch -D "$branch"
+				run_step "delete local branch '$branch'" git --git-dir="$bare" branch -D "$branch"
 				success "local branch deleted: $(style "$BOLD" "$branch")"
 			fi
 			;;
