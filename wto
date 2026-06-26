@@ -70,9 +70,11 @@ ${BOLD}wto${RESET} - Worktree Organizer
 
 ${BOLD}Usage${RESET}:
   $PROGRAM clone <git-url> [directory]
+  $PROGRAM new <branch>
   $PROGRAM create [#<pr-number>|<branch>|main]
   $PROGRAM tmux
   $PROGRAM close [#<pr-number>|<branch>|main]
+  $PROGRAM worktree new <branch>
   $PROGRAM worktree create [#<pr-number>|<branch>|main]
   $PROGRAM worktree tmux
   $PROGRAM worktree close [#<pr-number>|<branch>|main]
@@ -516,6 +518,29 @@ create_branch_worktree() {
 	fi
 }
 
+create_new_branch_worktree() {
+	base_dir=$1
+	branch=$2
+	bare=$(bare_dir "$base_dir")
+	path=$(branch_path "$base_dir" "$branch")
+	remote=$(default_branch "$base_dir")
+
+	git check-ref-format --branch "$branch" >/dev/null 2>&1 || die "Invalid branch name: $branch"
+	[ ! -e "$path" ] || die "Path already exists: $path"
+
+	if git --git-dir="$bare" show-ref --verify --quiet "refs/heads/$branch"; then
+		die "Local branch already exists: $branch"
+	fi
+
+	if git --git-dir="$bare" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+		die "Remote branch already exists: $branch"
+	fi
+
+	git --git-dir="$bare" fetch origin "+refs/heads/$remote:refs/remotes/origin/$remote"
+	git --git-dir="$bare" worktree add -b "$branch" "$path" "origin/$remote"
+	git -C "$path" push -u origin "$branch"
+}
+
 next_tmux_number() {
 	class=$1
 	start=$2
@@ -773,6 +798,28 @@ cmd_create() {
 	fi
 }
 
+cmd_new() {
+	need_cmd git
+
+	base_dir=$(find_base_dir)
+	branch=${1:-}
+	if [ -z "$branch" ]; then
+		branch=$(prompt_text "New branch")
+	fi
+
+	[ -n "$branch" ] || die "Branch name is required."
+
+	create_new_branch_worktree "$base_dir" "$branch"
+	created_path=$(branch_path "$base_dir" "$branch")
+
+	success "branch pushed to origin: $(style "$BOLD" "$branch")"
+	success "worktree created at $(style "$BOLD" "$created_path")"
+
+	if confirm "Create tmux session for this worktree?" n; then
+		start_tmux_for_path "$base_dir" "$created_path"
+	fi
+}
+
 cmd_tmux() {
 	base_dir=$(find_base_dir)
 
@@ -851,6 +898,10 @@ main() {
 			shift
 			cmd_clone "$@"
 			;;
+		new)
+			shift
+			cmd_new "$@"
+			;;
 		create)
 			shift
 			cmd_create "$@"
@@ -867,6 +918,10 @@ main() {
 			shift
 			sub=${1:-}
 			case $sub in
+				new)
+					shift
+					cmd_new "$@"
+					;;
 				create)
 					shift
 					cmd_create "$@"

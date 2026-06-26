@@ -45,6 +45,7 @@ Rules:
 
 ```sh
 ./wto clone <git-url> [directory]
+./wto new <branch-name>
 ./wto create [#123|branch-name|main]
 ./wto tmux
 ./wto close [#123|branch-name|main]
@@ -53,6 +54,7 @@ Rules:
 The `worktree` namespace is also supported:
 
 ```sh
+./wto worktree new <branch-name>
 ./wto worktree create [#123|branch-name|main]
 ./wto worktree tmux
 ./wto worktree close [#123|branch-name|main]
@@ -66,6 +68,10 @@ The help screen includes a compact ASCII banner:
 
 Run `create`, `tmux`, and `close` from anywhere inside the managed repository
 root, the `.bare` repository, or one of its worktrees.
+
+Run `new` to create a local branch from the repository's default branch, push it
+to `origin` with upstream tracking, and create a worktree using the same path
+layout as `create`.
 
 When `create` is run without a target, `fzf` shows candidates ordered by newest
 commit date first. Rows include the target, associated open PR number when
