@@ -1,4 +1,5 @@
 name: Auto Release
+run-name: Release · ${{ github.event_name == 'workflow_dispatch' && inputs.part || 'patch' }} · ${{ github.ref_name || github.event.workflow_run.head_branch }}
 
 on:
   workflow_dispatch:
@@ -27,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    name: Bump version and release
+    name: Bump version, publish release, then tag
     if: >
       github.event_name == 'workflow_dispatch' ||
       (
@@ -50,16 +51,27 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Bump version
+      - name: Bump version and push release commit
         id: bump
         env:
-          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
           BUMP_PART: ${{ github.event_name == 'workflow_dispatch' && inputs.part || 'patch' }}
+          TRIGGER_EVENT: ${{ github.event_name }}
+          TRIGGER_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+          TRIGGER_RUN_TITLE: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.display_title || '' }}
         run: |
           current_sha=$(git rev-parse HEAD)
           if [ -n "$CI_HEAD_SHA" ] && [ "$current_sha" != "$CI_HEAD_SHA" ]; then
             echo "main moved from $CI_HEAD_SHA to $current_sha; skipping release."
             echo "released=false" >>"$GITHUB_OUTPUT"
+            {
+              echo "## Release skipped"
+              echo
+              echo "main moved before the release workflow started."
+              echo
+              echo "- Expected CI head: \`$CI_HEAD_SHA\`"
+              echo "- Current main: \`$current_sha\`"
+            } >>"$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -98,23 +110,62 @@ jobs:
 
           git add wto
           git commit -m "chore(release): $tag"
-          git tag -a "$tag" -m "wto $tag"
+          release_sha=$(git rev-parse HEAD)
 
           git push origin HEAD:main
-          git push origin "$tag"
 
-          echo "released=true" >>"$GITHUB_OUTPUT"
-          echo "version=$next" >>"$GITHUB_OUTPUT"
-          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          {
+            echo "released=true"
+            echo "previous_version=$version"
+            echo "version=$next"
+            echo "tag=$tag"
+            echo "release_sha=$release_sha"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo "## Release commit prepared"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Trigger | \`$TRIGGER_EVENT\` |"
+            echo "| Trigger run | \`${TRIGGER_RUN_ID:-manual}\` |"
+            echo "| Trigger title | \`${TRIGGER_RUN_TITLE:-manual dispatch}\` |"
+            echo "| Bump part | \`$BUMP_PART\` |"
+            echo "| Previous version | \`$version\` |"
+            echo "| Next version | \`$next\` |"
+            echo "| Release tag | \`$tag\` |"
+            echo "| Release commit | \`$release_sha\` |"
+          } >>"$GITHUB_STEP_SUMMARY"
 
-      - name: Create GitHub release
+      - name: Create GitHub release and tag
         if: steps.bump.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.bump.outputs.tag }}
           VERSION: ${{ steps.bump.outputs.version }}
+          PREVIOUS_VERSION: ${{ steps.bump.outputs.previous_version }}
+          RELEASE_SHA: ${{ steps.bump.outputs.release_sha }}
+          BUMP_PART: ${{ github.event_name == 'workflow_dispatch' && inputs.part || 'patch' }}
         run: |
           gh release create "$TAG" \
+            --target "$RELEASE_SHA" \
             ./wto \
             --title "wto v$VERSION" \
-            --notes "Release $TAG"
+            --notes "Release $TAG
+
+          - Previous version: $PREVIOUS_VERSION
+          - New version: $VERSION
+          - Bump part: $BUMP_PART
+          - Release commit: $RELEASE_SHA
+          - Published by: $GITHUB_WORKFLOW
+
+          The tag is created by this release step after the release commit has been pushed."
+
+          {
+            echo
+            echo "## GitHub release published"
+            echo
+            echo "- Release: \`$TAG\`"
+            echo "- Version: \`$VERSION\`"
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- Tag creation: handled by \`gh release create --target\`"
+          } >>"$GITHUB_STEP_SUMMARY"

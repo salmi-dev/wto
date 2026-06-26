@@ -117,23 +117,16 @@ bats test
 ```
 
 After CI succeeds on a push to `main`, the auto-release workflow bumps the patch
-version in `wto`, commits the bump, tags it, pushes the tag, and creates a
-GitHub release with `gh`.
+version in `wto`, commits the bump, pushes the release commit, and creates a
+GitHub release with `gh`. The release step creates the Git tag with the release,
+so tags are only added after release creation succeeds.
 
 The auto-release workflow can also be run manually from GitHub Actions. Choose
 the SemVer part to bump: `major`, `minor`, or `patch`. The manual default is
 `minor`.
 
-Manual releases are also tag-based. Push a SemVer tag matching the script
-version:
-
-```sh
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The release workflow validates that the tag matches `VERSION` and then uses
-`gh release create` to publish a GitHub release with `wto` attached.
+There is no tag-triggered release workflow. Use the Auto Release workflow for
+both automatic and manual releases.
 
 ## Output Styling
 
