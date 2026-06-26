@@ -49,6 +49,7 @@ Rules:
 ## Usage
 
 ```sh
+./wto [status] [--format table|json]
 ./wto clone <git-url> [directory]
 ./wto new <branch-name>
 ./wto create [#123|branch-name|main]
@@ -60,6 +61,7 @@ Rules:
 The `worktree` namespace is also supported:
 
 ```sh
+./wto worktree status [--format table|json]
 ./wto worktree new <branch-name>
 ./wto worktree create [#123|branch-name|main]
 ./wto worktree tmux
@@ -75,6 +77,11 @@ The help screen includes a compact ASCII banner:
 
 Run `create`, `tmux`, and `close` from anywhere inside the managed repository
 root, the `.bare` repository, or one of its worktrees.
+
+Run `status`, or just `wto` with no subcommand, to list managed worktrees. In a
+terminal, the default output is a colored box-drawing table with the `wto`
+banner. When stdout is piped or redirected, the default output is JSON. Use
+`--format table` or `--format json` to force either format.
 
 Run `new` to create a local branch from the repository's default branch, push it
 to `origin` with upstream tracking, and create a worktree using the same path

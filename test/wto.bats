@@ -26,6 +26,7 @@ setup() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"██╗    ██╗████████╗ ██████╗"* ]]
 	[[ "$output" == *"wto v$VERSION - WorkTree Organizer"* ]]
+	[[ "$output" == *"wto [status] [--format table|json]"* ]]
 	[[ "$output" == *"wto new <branch>"* ]]
 	[[ "$output" == *"wto worktree version"* ]]
 }
@@ -45,8 +46,91 @@ setup() {
 
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"error Unknown worktree command: nope"* ]]
-	[[ "$output" == *"Worktree: wto worktree <new|create|tmux|version|close>"* ]]
+	[[ "$output" == *"Worktree: wto worktree <status|new|create|tmux|version|close>"* ]]
 	[[ "$output" != *"Structure:"* ]]
+}
+
+make_managed_repo() {
+	tmp=$1
+	src="$tmp/src"
+	origin="$tmp/origin.git"
+	managed="$tmp/managed"
+
+	git init "$src" >/dev/null
+	git -C "$src" config user.email test@example.com
+	git -C "$src" config user.name Test
+	printf 'hello\n' >"$src/README.md"
+	git -C "$src" add README.md
+	git -C "$src" commit -m init >/dev/null
+	git -C "$src" branch -M main
+	git -C "$src" checkout -b feature/status >/dev/null 2>&1
+	printf 'feature\n' >"$src/feature.txt"
+	git -C "$src" add feature.txt
+	git -C "$src" commit -m feature >/dev/null
+	git clone --bare "$src" "$origin" >/dev/null 2>&1
+	git --git-dir="$origin" symbolic-ref HEAD refs/heads/main
+
+	mkdir -p "$managed"
+	git clone --bare "$origin" "$managed/.bare" >/dev/null 2>&1
+	git --git-dir="$managed/.bare" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+	git --git-dir="$managed/.bare" fetch origin --prune >/dev/null
+	git --git-dir="$managed/.bare" update-ref -d refs/heads/main
+	git --git-dir="$managed/.bare" update-ref -d refs/heads/feature/status
+	git --git-dir="$managed/.bare" worktree add -b main "$managed/managed-main" origin/main >/dev/null
+	git --git-dir="$managed/.bare" worktree add -b feature/status "$managed/feature/status" origin/feature/status >/dev/null
+}
+
+@test "status is the default command and prints json when stdout is not a terminal" {
+	tmp=$(mktemp -d)
+	make_managed_repo "$tmp"
+	git_dir=$(dirname "$(command -v git)")
+
+	cd "$tmp/managed"
+	run env WTO_COLOR=never PATH="$git_dir:/usr/bin:/bin" "$WTO"
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == \{\"baseDir\":* ]]
+	[[ "$output" == *"\"worktrees\":["* ]]
+	[[ "$output" == *"\"name\":\"managed-main\""* ]]
+	[[ "$output" == *"\"branch\":\"main\""* ]]
+	[[ "$output" == *"\"remoteBranch\":\"origin/main\""* ]]
+	[[ "$output" == *"\"name\":\"feature/status\""* ]]
+	[[ "$output" == *"\"branch\":\"feature/status\""* ]]
+	[[ "$output" == *"\"state\":\"clean\""* ]]
+}
+
+@test "status --format table prints a banner and box-drawing table" {
+	tmp=$(mktemp -d)
+	make_managed_repo "$tmp"
+	git_dir=$(dirname "$(command -v git)")
+	managed_path=$(cd "$tmp/managed" && pwd -P)
+
+	cd "$tmp/managed"
+	run env WTO_COLOR=never PATH="$git_dir:/usr/bin:/bin" "$WTO" status --format table
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"██╗    ██╗████████╗ ██████╗"* ]]
+	[[ "$output" == *"status $managed_path"* ]]
+	[[ "$output" == *"┌"* ]]
+	[[ "$output" == *"│ here │ worktree"* ]]
+	[[ "$output" == *"├"* ]]
+	[[ "$output" == *"└"* ]]
+	[[ "$output" == *"managed-main"* ]]
+	[[ "$output" == *"feature/status"* ]]
+	[[ "$output" == *"origin/main"* ]]
+}
+
+@test "--format can force default status output without naming status" {
+	tmp=$(mktemp -d)
+	make_managed_repo "$tmp"
+	git_dir=$(dirname "$(command -v git)")
+
+	cd "$tmp/managed"
+	run env WTO_COLOR=never PATH="$git_dir:/usr/bin:/bin" "$WTO" --format table
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"│ here │ worktree"* ]]
+	[[ "$output" == *"managed-main"* ]]
 }
 
 @test "failed clone reports the failed wto operation and exit code" {

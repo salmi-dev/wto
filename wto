@@ -79,12 +79,14 @@ $(banner)
 ${BOLD}wto${RESET} ${DIM}v$VERSION${RESET} - WorkTree Organizer
 
 ${BOLD}Usage${RESET}:
+  $PROGRAM [status] [--format table|json]
   $PROGRAM clone <git-url> [directory]
   $PROGRAM new <branch>
   $PROGRAM create [#<pr-number>|<branch>|main]
   $PROGRAM tmux
   $PROGRAM version
   $PROGRAM close [#<pr-number>|<branch>|main]
+  $PROGRAM worktree status [--format table|json]
   $PROGRAM worktree new <branch>
   $PROGRAM worktree create [#<pr-number>|<branch>|main]
   $PROGRAM worktree tmux
@@ -104,8 +106,8 @@ usage_hint() {
 	cat >&2 <<EOF
 ${BOLD}Usage${RESET}: $PROGRAM <command> [options]
 
-${BOLD}Commands${RESET}: clone, new, create, tmux, version, close
-${BOLD}Worktree${RESET}: $PROGRAM worktree <new|create|tmux|version|close>
+${BOLD}Commands${RESET}: status, clone, new, create, tmux, version, close
+${BOLD}Worktree${RESET}: $PROGRAM worktree <status|new|create|tmux|version|close>
 
 Run '$PROGRAM --help' for full usage.
 EOF
@@ -409,6 +411,383 @@ worktree_lines() {
 			}
 		}
 	'
+}
+
+relative_path() {
+	base_dir=$1
+	path=$2
+
+	case $path in
+		"$base_dir")
+			printf '.\n'
+			;;
+		"$base_dir"/*)
+			printf '%s\n' "${path#"$base_dir"/}"
+			;;
+		*)
+			printf '%s\n' "$path"
+			;;
+	esac
+}
+
+json_escape() {
+	awk '
+		{
+			gsub(/\\/,"\\\\")
+			gsub(/"/,"\\\"")
+			gsub(/\t/,"\\t")
+			gsub(/\r/,"\\r")
+			gsub(/\n/,"\\n")
+			printf "%s", $0
+		}
+	'
+}
+
+json_string() {
+	printf '"'
+	printf '%s' "$1" | json_escape
+	printf '"'
+}
+
+status_pr_lines() {
+	base_dir=$1
+	repo=$(gh_repo "$base_dir" || true)
+
+	command -v gh >/dev/null 2>&1 || return 0
+
+	if [ -n "$repo" ]; then
+		gh pr list --repo "$repo" --state all --limit 100 --json number,headRefName,state,url \
+			--template '{{range .}}{{printf "%s\t#%v\t%s\t%s\n" .headRefName .number .state .url}}{{end}}' 2>/dev/null || true
+	else
+		gh pr list --state all --limit 100 --json number,headRefName,state,url \
+			--template '{{range .}}{{printf "%s\t#%v\t%s\t%s\n" .headRefName .number .state .url}}{{end}}' 2>/dev/null || true
+	fi
+}
+
+pr_head_from_path() {
+	base_dir=$1
+	path=$2
+
+	case $path in
+		"$base_dir/pr/"*)
+			printf '%s\n' "${path#"$base_dir/pr/"}"
+			;;
+	esac
+}
+
+remote_ref_exists() {
+	base_dir=$1
+	branch=$2
+
+	[ -n "$branch" ] || return 1
+	git --git-dir="$(bare_dir "$base_dir")" show-ref --verify --quiet "refs/remotes/origin/$branch"
+}
+
+status_upstream() {
+	path=$1
+
+	git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true
+}
+
+status_remote_branch() {
+	base_dir=$1
+	path=$2
+	branch=$3
+	head=$4
+
+	upstream=$(status_upstream "$path")
+	if [ -n "$upstream" ]; then
+		printf '%s\n' "$upstream"
+		return
+	fi
+
+	if remote_ref_exists "$base_dir" "$head"; then
+		printf 'origin/%s\n' "$head"
+		return
+	fi
+
+	if remote_ref_exists "$base_dir" "$branch"; then
+		printf 'origin/%s\n' "$branch"
+		return
+	fi
+
+	if [ -n "$head" ]; then
+		printf '%s\n' "$head"
+	else
+		printf -- '-\n'
+	fi
+}
+
+status_ahead_behind() {
+	path=$1
+	remote=$2
+
+	case $remote in
+		''|'-')
+			printf '0\t0\n'
+			return
+			;;
+	esac
+
+	counts=$(git -C "$path" rev-list --left-right --count "$remote...HEAD" 2>/dev/null || printf '0	0')
+	printf '%s\n' "$counts"
+}
+
+status_state() {
+	path=$1
+
+	if [ ! -d "$path" ]; then
+		printf 'missing\n'
+	elif [ -n "$(git -C "$path" status --porcelain 2>/dev/null || true)" ]; then
+		printf 'dirty\n'
+	else
+		printf 'clean\n'
+	fi
+}
+
+status_current_marker() {
+	path=$1
+	current=$2
+
+	case $current in
+		"$path"|"$path"/*)
+			printf '*\n'
+			;;
+		*)
+			printf -- '-\n'
+			;;
+	esac
+}
+
+status_rows() {
+	base_dir=$1
+	pr_file=$2
+	name=$(base_name "$base_dir")
+	current=$(pwd -P)
+
+	worktree_lines "$base_dir" |
+	while IFS='	' read -r path branch; do
+		[ -n "$path" ] || continue
+		display_branch=$branch
+		[ -n "$display_branch" ] || display_branch='(detached)'
+
+		head=$(pr_head_from_path "$base_dir" "$path")
+		remote=$(status_remote_branch "$base_dir" "$path" "$branch" "$head")
+		state=$(status_state "$path")
+		tmux_session=$(tmux_session_for_path "$path" || true)
+		[ -n "$tmux_session" ] || tmux_session='-'
+
+		pr='-'
+		pr_state='-'
+		pr_url=''
+		case $branch in
+			"$name-PR"*)
+				num=${branch#"$name-PR"}
+				case $num in
+					*[!0-9]*|'') ;;
+					*) pr="#$num" ;;
+				esac
+				;;
+		esac
+
+		if [ -s "$pr_file" ]; then
+			pr_match=$(awk -F '	' -v branch="$branch" -v head="$head" '
+				($1 == branch || (head != "" && $1 == head)) {
+					print $2 "\t" $3 "\t" $4
+					exit
+				}
+			' "$pr_file")
+			if [ -n "$pr_match" ]; then
+				pr=$(printf '%s\n' "$pr_match" | awk -F '	' '{ print $1 }')
+				pr_state=$(printf '%s\n' "$pr_match" | awk -F '	' '{ print $2 }')
+				pr_url=$(printf '%s\n' "$pr_match" | awk -F '	' '{ print $3 }')
+			fi
+		fi
+
+		if [ "$pr" != '-' ] && [ "$pr_state" = '-' ]; then
+			pr_state=unknown
+		fi
+
+		ahead=0
+		behind=0
+		if [ "$state" != missing ]; then
+			ab=$(status_ahead_behind "$path" "$remote")
+			behind=$(printf '%s\n' "$ab" | awk -F '	' '{ print $1 }')
+			ahead=$(printf '%s\n' "$ab" | awk -F '	' '{ print $2 }')
+		fi
+
+		here=$(status_current_marker "$path" "$current")
+		rel=$(relative_path "$base_dir" "$path")
+
+		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+			"$here" "$rel" "$display_branch" "$remote" "$pr" "$pr_state" "$tmux_session" "$state" "$ahead" "$behind" "$path" "$pr_url"
+	done
+}
+
+status_table() {
+	awk -F '	' \
+		-v reset="$RESET" \
+		-v bold="$BOLD" \
+		-v dim="$DIM" \
+		-v red="$RED" \
+		-v green="$GREEN" \
+		-v yellow="$YELLOW" \
+		-v blue="$BLUE" \
+		-v cyan="$CYAN" \
+		-v magenta="$MAGENTA" '
+		BEGIN {
+			headers[1] = "here"
+			headers[2] = "worktree"
+			headers[3] = "branch"
+			headers[4] = "remote"
+			headers[5] = "PR"
+			headers[6] = "tmux"
+			headers[7] = "state"
+			headers[8] = "ahead"
+			headers[9] = "behind"
+			for (i = 1; i <= 9; i++) {
+				width[i] = length(headers[i])
+			}
+		}
+		{
+			row_count++
+			values[row_count,1] = ($1 == "-" ? "" : $1)
+			values[row_count,2] = $2
+			values[row_count,3] = $3
+			values[row_count,4] = $4
+			values[row_count,5] = $5
+			values[row_count,6] = $7
+			values[row_count,7] = $8
+			values[row_count,8] = $9
+			values[row_count,9] = $10
+			for (i = 1; i <= 9; i++) {
+				if (length(values[row_count,i]) > width[i]) {
+					width[i] = length(values[row_count,i])
+				}
+			}
+		}
+		function repeat(text, count,    out, i) {
+			out = ""
+			for (i = 0; i < count; i++) {
+				out = out text
+			}
+			return out
+		}
+		function border(left, middle, right,    i) {
+			printf "%s", left
+			for (i = 1; i <= 9; i++) {
+				printf "%s", repeat("─", width[i] + 2)
+				printf "%s", (i == 9 ? right : middle)
+			}
+			printf "\n"
+		}
+		function cell_color(col, value,    n) {
+			if (col == 1) {
+				return value == "*" ? green : dim
+			}
+			if (col == 2 || col == 3) {
+				return cyan
+			}
+			if (col == 4) {
+				return value == "-" ? dim : blue
+			}
+			if (col == 5) {
+				return value == "-" ? dim : magenta
+			}
+			if (col == 6) {
+				return value == "-" ? dim : green
+			}
+			if (col == 7) {
+				if (value == "clean") {
+					return green
+				}
+				if (value == "dirty") {
+					return yellow
+				}
+				if (value == "missing") {
+					return red
+				}
+				return dim
+			}
+			if (col == 8 || col == 9) {
+				n = value + 0
+				return n > 0 ? yellow : dim
+			}
+			return ""
+		}
+		function header_row(    i) {
+			printf "│"
+			for (i = 1; i <= 9; i++) {
+				printf " %s%-*s%s │", bold, width[i], headers[i], reset
+			}
+			printf "\n"
+		}
+		function body_row(data,    i, color) {
+			printf "│"
+			for (i = 1; i <= 9; i++) {
+				color = cell_color(i, data[i])
+				printf " %s%-*s%s │", color, width[i], data[i], reset
+			}
+			printf "\n"
+		}
+		END {
+			border("┌", "┬", "┐")
+			header_row()
+			border("├", "┼", "┤")
+			for (r = 1; r <= row_count; r++) {
+				for (i = 1; i <= 9; i++) {
+					row_values[i] = values[r,i]
+				}
+				body_row(row_values)
+			}
+			border("└", "┴", "┘")
+		}
+	'
+}
+
+status_json() {
+	base_dir=$1
+	first=1
+
+	printf '{'
+	printf '"baseDir":'
+	json_string "$base_dir"
+	printf ',"worktrees":['
+	while IFS='	' read -r here rel branch remote pr pr_state tmux_session state ahead behind path pr_url; do
+		[ -n "$path" ] || continue
+		if [ "$first" = 1 ]; then
+			first=0
+		else
+			printf ','
+		fi
+
+		printf '{'
+		printf '"current":'
+		if [ "$here" = '*' ]; then printf true; else printf false; fi
+		printf ',"name":'
+		json_string "$rel"
+		printf ',"branch":'
+		json_string "$branch"
+		printf ',"remoteBranch":'
+		json_string "$remote"
+		printf ',"pr":'
+		json_string "$pr"
+		printf ',"prState":'
+		json_string "$pr_state"
+		printf ',"prUrl":'
+		json_string "$pr_url"
+		printf ',"tmuxSession":'
+		json_string "$tmux_session"
+		printf ',"state":'
+		json_string "$state"
+		printf ',"ahead":%s' "$ahead"
+		printf ',"behind":%s' "$behind"
+		printf ',"path":'
+		json_string "$path"
+		printf '}'
+	done
+	printf ']}'
+	printf '\n'
 }
 
 select_worktree() {
@@ -925,6 +1304,67 @@ cmd_version() {
 	dependency_line tmux optional
 }
 
+cmd_status() {
+	base_dir=$(find_base_dir)
+	format=
+
+	if [ -t 1 ]; then
+		format=table
+	else
+		format=json
+	fi
+
+	while [ "$#" -gt 0 ]; do
+		case $1 in
+			--format)
+				shift
+				[ -n "${1:-}" ] || die "Missing value for --format."
+				format=$1
+				;;
+			--format=*)
+				format=${1#--format=}
+				;;
+			-h|--help)
+				cat <<EOF
+${BOLD}Usage${RESET}: $PROGRAM status [--format table|json]
+
+Show managed worktrees with branch, remote, PR, tmux, and repository status.
+When stdout is not a terminal, JSON is used by default.
+EOF
+				return
+				;;
+			*)
+				die "Unknown status option: $1"
+				;;
+		esac
+		shift
+	done
+
+	case $format in
+		table|json) ;;
+		*) die "Invalid format: $format. Expected table or json." ;;
+	esac
+
+	pr_file=$(mktemp "${TMPDIR:-/tmp}/wto-status-prs.XXXXXX") || die "Could not create temp file."
+	status_pr_lines "$base_dir" >"$pr_file"
+	rows_file=$(mktemp "${TMPDIR:-/tmp}/wto-status-rows.XXXXXX") || die "Could not create temp file."
+	status_rows "$base_dir" "$pr_file" >"$rows_file"
+
+	case $format in
+		table)
+			banner
+			printf '\n'
+			printf '%s %s\n\n' "$(style "$BOLD" "status")" "$(style "$DIM" "$base_dir")"
+			status_table <"$rows_file"
+			;;
+		json)
+			status_json "$base_dir" <"$rows_file"
+			;;
+	esac
+
+	rm -f "$pr_file" "$rows_file"
+}
+
 cmd_tmux() {
 	base_dir=$(find_base_dir)
 
@@ -1000,12 +1440,22 @@ cmd_close() {
 main() {
 	cmd=${1:-}
 	case $cmd in
-		-h|--help|'')
+		-h|--help)
 			usage
+			;;
+		'')
+			cmd_status
+			;;
+		--format|--format=*)
+			cmd_status "$@"
 			;;
 		-v|--version)
 			shift
 			cmd_version "$@"
+			;;
+		status)
+			shift
+			cmd_status "$@"
 			;;
 		clone)
 			shift
@@ -1035,6 +1485,16 @@ main() {
 			shift
 			sub=${1:-}
 			case $sub in
+				'')
+					cmd_status
+					;;
+				--format|--format=*)
+					cmd_status "$@"
+					;;
+				status)
+					shift
+					cmd_status "$@"
+					;;
 				new)
 					shift
 					cmd_new "$@"
