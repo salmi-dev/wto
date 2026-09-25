@@ -27,7 +27,7 @@ setup() {
 	[[ "$output" == *"██╗    ██╗████████╗ ██████╗"* ]]
 	[[ "$output" == *"wto v$VERSION - WorkTree Organizer"* ]]
 	[[ "$output" == *"wto [status] [--format table|json]"* ]]
-	[[ "$output" == *"wto new <branch>"* ]]
+	[[ "$output" == *"wto new [-y] <branch>"* ]]
 	[[ "$output" == *"wto worktree version"* ]]
 }
 
@@ -46,7 +46,7 @@ setup() {
 
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"error Unknown worktree command: nope"* ]]
-	[[ "$output" == *"Worktree: wto worktree <status|new|create|tmux|version|close>"* ]]
+	[[ "$output" == *"Worktree: wto worktree <status|new|create|tmux|version|close|agent>"* ]]
 	[[ "$output" != *"Structure:"* ]]
 }
 
