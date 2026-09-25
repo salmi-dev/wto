@@ -15,6 +15,11 @@ BLUE=
 CYAN=
 MAGENTA=
 
+# Non-interactive controls. They may be supplied before a subcommand or as
+# leading options after a subcommand.
+ASSUME_YES=0
+FORCE=0
+
 use_color=0
 case ${WTO_COLOR:-auto} in
 	always)
@@ -80,18 +85,26 @@ ${BOLD}wto${RESET} ${DIM}v$VERSION${RESET} - WorkTree Organizer
 
 ${BOLD}Usage${RESET}:
   $PROGRAM [status] [--format table|json]
-  $PROGRAM clone <git-url> [directory]
-  $PROGRAM new <branch>
-  $PROGRAM create [#<pr-number>|<branch>|main]
+  $PROGRAM clone [-y] <git-url> [directory]
+  $PROGRAM new [-y] <branch>
+  $PROGRAM create [-y] [--tmux|--no-tmux] [#<pr-number>|<branch>|main]
   $PROGRAM tmux
   $PROGRAM version
-  $PROGRAM close [#<pr-number>|<branch>|main]
+  $PROGRAM close [#<pr-number>|<branch>|main] [-y] [-f]
+  $PROGRAM agent
   $PROGRAM worktree status [--format table|json]
-  $PROGRAM worktree new <branch>
-  $PROGRAM worktree create [#<pr-number>|<branch>|main]
+  $PROGRAM worktree new <branch> [--tmux|--no-tmux]
+  $PROGRAM worktree create [#<pr-number>|<branch>|main] [--tmux|--no-tmux]
   $PROGRAM worktree tmux
   $PROGRAM worktree version
   $PROGRAM worktree close [#<pr-number>|<branch>|main]
+  $PROGRAM worktree agent
+
+${BOLD}Non-interactive options${RESET}:
+  -y, --yes       Answer yes to confirmations (use selectors/paths too)
+  -f, --force     Force risky close operations (implies --yes for close)
+  --tmux          Create a detached tmux session for new/create
+  --no-tmux       Do not create a tmux session for new/create
 
 ${BOLD}Structure${RESET}:
   <repo>/.bare
@@ -106,8 +119,10 @@ usage_hint() {
 	cat >&2 <<EOF
 ${BOLD}Usage${RESET}: $PROGRAM <command> [options]
 
-${BOLD}Commands${RESET}: status, clone, new, create, tmux, version, close
-${BOLD}Worktree${RESET}: $PROGRAM worktree <status|new|create|tmux|version|close>
+${BOLD}Commands${RESET}: status, clone, new, create, tmux, version, close, agent
+${BOLD}Worktree${RESET}: $PROGRAM worktree <status|new|create|tmux|version|close|agent>
+
+Use '$PROGRAM agent' for agent-oriented, non-interactive usage.
 
 Run '$PROGRAM --help' for full usage.
 EOF
@@ -189,6 +204,10 @@ dependency_line() {
 confirm() {
 	prompt=$1
 	default=${2:-n}
+
+	if [ "$ASSUME_YES" = 1 ]; then
+		return 0
+	fi
 
 	if [ "$default" = y ]; then
 		suffix='[Y/n]'
@@ -1071,13 +1090,18 @@ switch_tmux_session() {
 start_tmux_for_path() {
 	base_dir=$1
 	path=$2
+	attach=${3:-yes}
 
 	need_cmd tmux
 	[ -d "$path" ] || die "Not a directory: $path"
 
 	if session=$(tmux_session_for_path "$path"); then
 		if [ -n "$session" ]; then
-			switch_tmux_session "$session"
+			if [ "$attach" = yes ]; then
+				switch_tmux_session "$session"
+			else
+				info "tmux session already exists: $(style "$BOLD" "$session")"
+			fi
 			return
 		fi
 	fi
@@ -1100,7 +1124,11 @@ start_tmux_for_path() {
 		run_step "create tmux session '$session'" tmux new-session -d -s "$session" -c "$path"
 	fi
 
-	switch_tmux_session "$session"
+	if [ "$attach" = yes ]; then
+		switch_tmux_session "$session"
+	else
+		success "tmux session created: $(style "$BOLD" "$session")"
+	fi
 }
 
 tmux_choices() {
@@ -1192,6 +1220,14 @@ unpushed_status() {
 }
 
 cmd_clone() {
+	while [ "$#" -gt 0 ]; do
+		case $1 in
+			-y|--yes) ASSUME_YES=1; shift ;;
+			-f|--force) FORCE=1; shift ;;
+			--) shift; break ;;
+			*) break ;;
+		esac
+	done
 	need_cmd git
 
 	repo=${1:-}
@@ -1231,11 +1267,28 @@ cmd_clone() {
 }
 
 cmd_create() {
+	tmux_mode=prompt
+	while [ "$#" -gt 0 ]; do
+		case $1 in
+			-y|--yes) ASSUME_YES=1; shift ;;
+			-f|--force) FORCE=1; shift ;;
+			--tmux) tmux_mode=detached; shift ;;
+			--no-tmux) tmux_mode=none; shift ;;
+			--) shift; break ;;
+			*) break ;;
+		esac
+	done
 	need_cmd git
 	need_cmd gh
 
 	base_dir=$(find_base_dir)
 	target=${1:-}
+	case ${2:-} in
+		--tmux) tmux_mode=detached ;;
+		--no-tmux) tmux_mode=none ;;
+		'') ;;
+		*) die "Unknown create option: $2" ;;
+	esac
 	if [ -z "$target" ]; then
 		target=$(select_create_target "$base_dir")
 	fi
@@ -1261,16 +1314,39 @@ cmd_create() {
 
 	success "worktree created at $(style "$BOLD" "$created_path")"
 
-	if confirm "Create tmux session for this worktree?" n; then
-		start_tmux_for_path "$base_dir" "$created_path"
-	fi
+	case $tmux_mode in
+		detached) start_tmux_for_path "$base_dir" "$created_path" no ;;
+		none) : ;;
+		*)
+			if confirm "Create tmux session for this worktree?" n; then
+				start_tmux_for_path "$base_dir" "$created_path"
+			fi
+			;;
+	esac
 }
 
 cmd_new() {
+	tmux_mode=prompt
+	while [ "$#" -gt 0 ]; do
+		case $1 in
+			-y|--yes) ASSUME_YES=1; shift ;;
+			-f|--force) FORCE=1; shift ;;
+			--tmux) tmux_mode=detached; shift ;;
+			--no-tmux) tmux_mode=none; shift ;;
+			--) shift; break ;;
+			*) break ;;
+		esac
+	done
 	need_cmd git
 
 	base_dir=$(find_base_dir)
 	branch=${1:-}
+	case ${2:-} in
+		--tmux) tmux_mode=detached ;;
+		--no-tmux) tmux_mode=none ;;
+		'') ;;
+		*) die "Unknown new option: $2" ;;
+	esac
 	if [ -z "$branch" ]; then
 		branch=$(prompt_text "New branch")
 	fi
@@ -1283,9 +1359,15 @@ cmd_new() {
 	success "branch pushed to origin: $(style "$BOLD" "$branch")"
 	success "worktree created at $(style "$BOLD" "$created_path")"
 
-	if confirm "Create tmux session for this worktree?" n; then
-		start_tmux_for_path "$base_dir" "$created_path"
-	fi
+	case $tmux_mode in
+		detached) start_tmux_for_path "$base_dir" "$created_path" no ;;
+		none) : ;;
+		*)
+			if confirm "Create tmux session for this worktree?" n; then
+				start_tmux_for_path "$base_dir" "$created_path"
+			fi
+			;;
+	esac
 }
 
 cmd_version() {
@@ -1391,7 +1473,40 @@ cmd_tmux() {
 	esac
 }
 
+cmd_agent() {
+	cat <<EOF
+wto agent usage
+
+Run commands with explicit arguments so they do not need a terminal:
+  $PROGRAM status --format json
+  $PROGRAM clone --yes <git-url> <directory>
+  $PROGRAM new --yes <branch>
+  $PROGRAM create --yes <branch|#PR|main> --tmux
+  $PROGRAM close --force <branch|#PR|main>
+
+Notes:
+  - Use --yes (-y) to accept confirmations.
+  - Use --force (-f) with close to abandon dirty or unpushed work.
+  - Use --tmux when creating a worktree to create a detached tmux session
+    without attaching the calling agent; use --no-tmux to disable it.
+  - Always provide a clone directory, branch, or target; omitted values may
+    start a prompt or fzf selector and therefore read standard input.
+  - tmux is interactive; do not run 'tmux' in automation unless a terminal
+    session is intended.
+  - Commands can be prefixed with -y or -f as well, for example:
+      $PROGRAM -y create feature/login
+EOF
+}
+
 cmd_close() {
+	while [ "$#" -gt 0 ]; do
+		case $1 in
+			-y|--yes) ASSUME_YES=1; shift ;;
+			-f|--force) FORCE=1; ASSUME_YES=1; shift ;;
+			--) shift; break ;;
+			*) break ;;
+		esac
+	done
 	need_cmd git
 
 	base_dir=$(find_base_dir)
@@ -1402,6 +1517,12 @@ cmd_close() {
 	risky=0
 
 	[ -d "$path" ] || die "Worktree path does not exist: $path"
+
+	# --force is deliberately limited to close: it allows abandoning local
+	# changes and unpushed commits, and makes git remove the worktree forcibly.
+	if [ "$FORCE" = 1 ]; then
+		force=--force
+	fi
 
 	if has_uncommitted_changes "$path"; then
 		warn "worktree has uncommitted changes"
@@ -1438,6 +1559,16 @@ cmd_close() {
 }
 
 main() {
+	# Accept automation flags before the subcommand as well as after it.
+	while [ "$#" -gt 0 ]; do
+		case $1 in
+			-y|--yes) ASSUME_YES=1; shift ;;
+			-f|--force) FORCE=1; ASSUME_YES=1; shift ;;
+			--) shift; break ;;
+			*) break ;;
+		esac
+	done
+
 	cmd=${1:-}
 	case $cmd in
 		-h|--help)
@@ -1481,6 +1612,11 @@ main() {
 			shift
 			cmd_close "$@"
 			;;
+		agent)
+			shift
+			[ "$#" -eq 0 ] || die "agent does not accept arguments."
+			cmd_agent
+			;;
 		worktree)
 			shift
 			sub=${1:-}
@@ -1514,6 +1650,11 @@ main() {
 				close)
 					shift
 					cmd_close "$@"
+					;;
+				agent)
+					shift
+					[ "$#" -eq 0 ] || die "agent does not accept arguments."
+					cmd_agent
 					;;
 				*)
 					invalid_worktree_command "${sub:-<missing>}"

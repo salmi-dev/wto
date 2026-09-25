@@ -56,6 +56,7 @@ Rules:
 ./wto tmux
 ./wto version
 ./wto close [#123|branch-name|main]
+./wto agent
 ```
 
 The `worktree` namespace is also supported:
@@ -98,6 +99,23 @@ managed repository first, followed by worktrees that do not already have a
 session. Selecting a session switches or attaches to it directly. Selecting a
 worktree creates a session only when one does not already exist for that
 worktree path.
+
+For automation, run `wto agent` for a compact usage guide. Supply targets and
+paths explicitly to avoid prompts and fzf, and use `-y`/`--yes` to accept
+confirmations. Use `-f`/`--force` with `close` to abandon dirty or unpushed
+work, for example:
+
+```sh
+wto --yes create feature/login --tmux
+wto --yes new feature/login --tmux
+wto --yes clone <git-url> <directory>
+wto --force close feature/login
+```
+
+The same commands are available below the `worktree` namespace. Add
+`--tmux` to `new` or `create` to create a detached session without attaching
+the calling agent; use `--no-tmux` to suppress session creation. Plain `tmux`
+remains interactive and should not be used by non-interactive agents.
 
 ## Version
 
