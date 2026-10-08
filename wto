@@ -657,12 +657,12 @@ status_table_compact() {
 			r = ++rows
 			value[r,1] = ($1 == "-" ? "" : $1)
 			value[r,2,1] = $2
-			value[r,2,2] = "↳ " $4
+			value[r,2,2] = "-> " $4
 			branch = $3
 			remote = $4
 			sub("^origin/", "", remote)
 			if (branch != "" && branch != remote)
-				value[r,2,3] = "└ " branch
+				value[r,2,3] = "+ " branch
 			else
 				value[r,2,3] = ""
 			value[r,3] = $5; value[r,4] = $7; value[r,5] = $8
@@ -689,12 +689,12 @@ status_table_compact() {
 			return ""
 		}
 		function cell(col, text, row,    c, suffix, padding) {
-			if (col == 2 && text ~ /^↳ origin\//) {
+			if (col == 2 && text ~ /^-> origin\//) {
 				suffix = text
-				sub("^↳ ", "", suffix)
+				sub("^-> ", "", suffix)
 				sub("^origin/", "", suffix)
 				padding = width[col] - length(text)
-				printf " %s↳ %s%s%s%s%s%s%*s ", dim, blue, "origin/", reset, cyan, suffix, reset, padding, ""
+				printf " %s-> %s%s%s%s%s%s%*s ", dim, blue, "origin/", reset, cyan, suffix, reset, padding, ""
 				return
 			}
 			c=color(col,text)
