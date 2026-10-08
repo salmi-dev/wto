@@ -643,6 +643,83 @@ status_rows() {
 	done
 }
 
+status_table_compact() {
+	awk -F '\t' \
+		-v reset="$RESET" -v bold="$BOLD" -v dim="$DIM" \
+		-v red="$RED" -v green="$GREEN" -v yellow="$YELLOW" \
+		-v blue="$BLUE" -v cyan="$CYAN" -v magenta="$MAGENTA" '
+		BEGIN {
+			headers[1] = "here"; headers[2] = "worktree"; headers[3] = "PR"
+			headers[4] = "tmux"; headers[5] = "state"; headers[6] = "ahead"; headers[7] = "behind"
+			for (i = 1; i <= 7; i++) width[i] = length(headers[i])
+		}
+		{
+			r = ++rows
+			value[r,1] = ($1 == "-" ? "" : $1)
+			value[r,2,1] = $2
+			value[r,2,2] = "↳ " $4
+			branch = $3
+			remote = $4
+			sub("^origin/", "", remote)
+			if (branch != "" && branch != remote)
+				value[r,2,3] = "└ " branch
+			else
+				value[r,2,3] = ""
+			value[r,3] = $5; value[r,4] = $7; value[r,5] = $8
+			value[r,6] = $9; value[r,7] = $10
+			for (i = 1; i <= 7; i++) {
+				if (i == 2) {
+					for (j = 1; j <= 3; j++) if (length(value[r,i,j]) > width[i]) width[i] = length(value[r,i,j])
+				} else if (length(value[r,i]) > width[i]) width[i] = length(value[r,i])
+			}
+		}
+		function repeat(text, count,    out, i) { out=""; for (i=0; i<count; i++) out=out text; return out }
+		function border(left, middle, right,    i) {
+			printf "%s", left
+			for (i=1; i<=7; i++) { printf "%s", repeat("─", width[i]+2); printf "%s", (i==7 ? right : middle) }
+			printf "\n"
+		}
+		function color(col, text,    n) {
+			if (col == 1) return text == "*" ? green : dim
+			if (col == 2) return text == value[current,2,2] ? blue : (text == value[current,2,3] ? yellow : cyan)
+			if (col == 3) return text == "-" ? dim : magenta
+			if (col == 4) return text == "-" ? dim : green
+			if (col == 5) return text == "clean" ? green : (text == "dirty" ? yellow : (text == "missing" ? red : dim))
+			if (col == 6 || col == 7) { n=text+0; return n > 0 ? yellow : dim }
+			return ""
+		}
+		function cell(col, text, row,    c, suffix, padding) {
+			if (col == 2 && text ~ /^↳ origin\//) {
+				suffix = text
+				sub("^↳ ", "", suffix)
+				sub("^origin/", "", suffix)
+				padding = width[col] - length(text)
+				printf " %s↳ %s%s%s%s%s%s%*s ", dim, blue, "origin/", reset, cyan, suffix, reset, padding, ""
+				return
+			}
+			c=color(col,text)
+			printf " %s%-*s%s ", c, width[col], text, reset
+		}
+		function header_row(    i) { printf "│"; for(i=1;i<=7;i++) { printf " %s%-*s%s │", bold,width[i],headers[i],reset }; printf "\n" }
+		function body_row(row,    h,i,line) {
+			for (h=1; h<=3; h++) {
+				if (h == 3 && value[row,2,3] == "") continue
+				current=row
+				printf "│"
+				cell(1, h==1 ? value[row,1] : "", row); printf "│"
+				line = value[row,2,h]; cell(2, line, row); printf "│"
+				for (i=3; i<=7; i++) { cell(i, h==1 ? value[row,i] : "", row); printf "│" }
+				printf "\n"
+			}
+		}
+		END {
+			border("┌","┬","┐"); header_row(); border("├","┼","┤")
+			for (r=1; r<=rows; r++) { body_row(r); if (r < rows) border("├","┼","┤") }
+			border("└","┴","┘")
+		}
+	'
+}
+
 status_table() {
 	awk -F '	' \
 		-v reset="$RESET" \
@@ -1486,7 +1563,7 @@ EOF
 			banner
 			printf '\n'
 			printf '%s %s\n\n' "$(style "$BOLD" "status")" "$(style "$DIM" "$base_dir")"
-			status_table <"$rows_file"
+			status_table_compact <"$rows_file"
 			;;
 		json)
 			status_json "$base_dir" <"$rows_file"

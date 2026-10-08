@@ -82,7 +82,10 @@ root, the `.bare` repository, or one of its worktrees.
 Run `status`, or just `wto` with no subcommand, to list managed worktrees. In a
 terminal, the default output is a colored box-drawing table with the `wto`
 banner. When stdout is piped or redirected, the default output is JSON. Use
-`--format table` or `--format json` to force either format.
+`--format table` or `--format json` to force either format. The table keeps
+worktree details compact by showing the path, remote, and (when different)
+local branch vertically in one column. PR, tmux, state, and ahead/behind remain
+separate columns, with colors highlighting remote and divergent branch data.
 
 Run `new` to create a local branch from the repository's default branch, push it
 to `origin` with upstream tracking, and create a worktree using the same path
