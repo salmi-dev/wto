@@ -809,6 +809,55 @@ status_json() {
 	printf '\n'
 }
 
+close_commit_date() {
+	path=$1
+	git -C "$path" log -1 --format='%cs' 2>/dev/null || printf -- '-\n'
+}
+
+close_pr_number() {
+	base_dir=$1
+	branch=$2
+	name=$(base_name "$base_dir")
+
+	case $branch in
+		"$name-PR"*)
+			num=${branch#"$name-PR"}
+			case $num in *[!0-9]*|'') printf -- '-\n' ;; *) printf '#%s\n' "$num" ;; esac
+			;;
+		*) printf -- '-\n' ;;
+	esac
+}
+
+close_worktree_choices() {
+	base_dir=$1
+	worktree_lines "$base_dir" |
+	while IFS='	' read -r path branch; do
+		[ -n "$path" ] || continue
+		target=$(relative_path "$base_dir" "$path")
+		[ -n "$branch" ] || branch='(detached)'
+		pr=$(close_pr_number "$base_dir" "$branch")
+		date=$(close_commit_date "$path")
+		state=clean
+		if has_uncommitted_changes "$path"; then
+			state=dirty
+		fi
+		printf '%s%-40s%s  %s%-8s%s  %s%-10s%s  %s%-7s%s\t%s\n' \
+			"$CYAN" "$target" "$RESET" "$MAGENTA" "$pr" "$RESET" "$DIM" "$date" "$RESET" "$YELLOW" "$state" "$RESET" "$path"
+	done
+}
+
+select_close_worktree() {
+	base_dir=$1
+	need_cmd fzf
+	header=$(printf '%s%-40s%s  %s%-8s%s  %s%-10s%s  %s%-7s%s' \
+		"$BOLD" "worktree" "$RESET" "$BOLD" "PR" "$RESET" "$BOLD" "date" "$RESET" "$BOLD" "state" "$RESET")
+	line=$(close_worktree_choices "$base_dir" |
+		fzf --ansi --prompt='close> ' --header="$header" --delimiter='	' --with-nth=1 |
+		awk -F '	' '{ print $2 }') || die "No worktree selected."
+	[ -n "$line" ] || die "No worktree selected."
+	printf '%s\n' "$line"
+}
+
 select_worktree() {
 	base_dir=$1
 	selector=${2:-}
@@ -1482,11 +1531,13 @@ Run commands with explicit arguments so they do not need a terminal:
   $PROGRAM clone --yes <git-url> <directory>
   $PROGRAM new --yes <branch>
   $PROGRAM create --yes <branch|#PR|main> --tmux
-  $PROGRAM close --force <branch|#PR|main>
+  $PROGRAM close --yes <branch|#PR|main>
 
 Notes:
-  - Use --yes (-y) to accept confirmations.
-  - Use --force (-f) with close to abandon dirty or unpushed work.
+  - Close displays a summary before removing the selected worktree.
+  - Use --yes (-y) to accept the close summary confirmation.
+  - Use --force (-f) with close to abandon dirty or unpushed work
+    (it also implies --yes).
   - Use --tmux when creating a worktree to create a detached tmux session
     without attaching the calling agent; use --no-tmux to disable it.
   - Always provide a clone directory, branch, or target; omitted values may
@@ -1496,6 +1547,44 @@ Notes:
   - Commands can be prefixed with -y or -f as well, for example:
       $PROGRAM -y create feature/login
 EOF
+}
+
+close_summary() {
+	base_dir=$1
+	path=$2
+	branch=$3
+	pr=$(close_pr_number "$base_dir" "$branch")
+	date=$(close_commit_date "$path")
+	state=clean
+	if has_uncommitted_changes "$path"; then
+		state=dirty
+	fi
+	unpushed=$(unpushed_status "$path" || true)
+	[ -n "$unpushed" ] || unpushed='none detected'
+	tmux_session=$(tmux_session_for_path "$path" || true)
+	[ -n "$tmux_session" ] || tmux_session='none'
+
+	if [ "$state" = dirty ]; then
+		state_display=$(style "$RED" "dirty")
+	else
+		state_display=$(style "$GREEN" "clean")
+	fi
+	if [ "$unpushed" = 'none detected' ]; then
+		unpushed_display=$(style "$GREEN" "$unpushed")
+	else
+		unpushed_display=$(style "$YELLOW" "$unpushed")
+	fi
+
+	printf '\n%s\n' "$(style "$BOLD" "About to close")" >&2
+	printf '  %-12s %s\n' "worktree" "$(relative_path "$base_dir" "$path")" >&2
+	printf '  %-12s %s\n' "branch" "$branch" >&2
+	printf '  %-12s %s\n' "PR" "$pr" >&2
+	printf '  %-12s %s\n' "last commit" "$date" >&2
+	printf '  %-12s %s\n' "state" "$state_display" >&2
+	printf '  %-12s %s\n' "unpushed" "$unpushed_display" >&2
+	printf '  %-12s %s\n' "tmux" "$tmux_session" >&2
+	printf '  %-12s %s\n' "path" "$path" >&2
+	printf '\n' >&2
 }
 
 cmd_close() {
@@ -1511,12 +1600,19 @@ cmd_close() {
 
 	base_dir=$(find_base_dir)
 	bare=$(bare_dir "$base_dir")
-	path=$(select_worktree "$base_dir" "${1:-}")
+	if [ -n "${1:-}" ]; then
+		path=$(select_worktree "$base_dir" "$1")
+	else
+		path=$(select_close_worktree "$base_dir")
+	fi
 	branch=$(branch_for_path "$base_dir" "$path")
 	force=
 	risky=0
 
 	[ -d "$path" ] || die "Worktree path does not exist: $path"
+
+	close_summary "$base_dir" "$path" "${branch:-detached}"
+	confirm "Close this worktree?" n || die "Close aborted."
 
 	# --force is deliberately limited to close: it allows abandoning local
 	# changes and unpushed commits, and makes git remove the worktree forcibly.

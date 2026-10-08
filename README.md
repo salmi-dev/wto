@@ -102,14 +102,15 @@ worktree path.
 
 For automation, run `wto agent` for a compact usage guide. Supply targets and
 paths explicitly to avoid prompts and fzf, and use `-y`/`--yes` to accept
-confirmations. Use `-f`/`--force` with `close` to abandon dirty or unpushed
-work, for example:
+confirmations. `close` prints the selected worktree summary before removing
+it; use `-f`/`--force` to abandon dirty or unpushed work, for example:
 
 ```sh
 wto --yes create feature/login --tmux
 wto --yes new feature/login --tmux
 wto --yes clone <git-url> <directory>
-wto --force close feature/login
+wto --yes close feature/login
+wto --force close feature/login  # also bypasses risky-close confirmation
 ```
 
 The same commands are available below the `worktree` namespace. Add
@@ -201,11 +202,13 @@ Examples:
 
 `wto close`:
 
-1. Selects a worktree with `fzf` unless a selector is provided.
-2. Checks for uncommitted changes.
-3. Checks whether the branch is ahead of its upstream.
-4. Warns when no upstream is configured.
-5. Asks before abandoning risky work.
+1. Shows an `fzf` picker with worktree, PR, last-commit date, and state columns
+   unless a selector is provided.
+2. Summarizes the selected worktree's branch, PR, commit date, state, unpushed
+   status, tmux session, and path, then asks for confirmation.
+3. Checks for uncommitted changes.
+4. Checks whether the branch is ahead of its upstream.
+5. Warns when no upstream is configured and asks before abandoning risky work.
 6. Kills tmux sessions whose initial path matches the worktree.
 7. Removes the worktree.
 8. Deletes the local branch.
