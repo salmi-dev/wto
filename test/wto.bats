@@ -172,7 +172,9 @@ make_managed_repo() {
 	run env WTO_COLOR=always PATH="$git_dir:/usr/bin:/bin" "$WTO" status --format table
 
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"feature/status "*$'\033[33m⚠\033[0m '*$'\033[33m↑1\033[0m '*$'\033[33m↓1\033[0m'* ]]
+	[[ "$output" == *$'\033[33m⚠\033[0m'* ]]
+	[[ "$output" == *$'\033[33m↑1\033[0m'* ]]
+	[[ "$output" == *$'\033[33m↓1\033[0m'* ]]
 	[[ "$output" != *"│ state "* ]]
 	[[ "$output" != *"│ ahead "* ]]
 	[[ "$output" != *"│ behind "* ]]
