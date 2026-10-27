@@ -155,6 +155,8 @@ make_managed_repo() {
 	make_managed_repo "$tmp"
 	git_dir=$(dirname "$(command -v git)")
 	worktree="$tmp/managed/feature/status"
+	git -C "$worktree" config user.email test@example.com
+	git -C "$worktree" config user.name Test
 
 	printf 'ahead commit\n' >>"$worktree/feature.txt"
 	git -C "$worktree" add feature.txt
