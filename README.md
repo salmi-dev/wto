@@ -50,6 +50,7 @@ Rules:
 
 ```sh
 ./wto [status] [--format table|json]
+./wto init [directory]
 ./wto clone <git-url> [directory]
 ./wto new <branch-name>
 ./wto create [#123|branch-name|main]
@@ -63,12 +64,17 @@ The `worktree` namespace is also supported:
 
 ```sh
 ./wto worktree status [--format table|json]
+./wto worktree init [directory]
 ./wto worktree new <branch-name>
 ./wto worktree create [#123|branch-name|main]
 ./wto worktree tmux
 ./wto worktree version
 ./wto worktree close [#123|branch-name|main]
 ```
+
+`init` creates the managed layout in the current directory (or the supplied
+folder): an empty bare repository at `.bare` and an unborn `main` worktree at
+`<folder>/<folder-name>-main`. Add a remote with Git when ready to publish.
 
 The help screen includes a compact ASCII banner:
 

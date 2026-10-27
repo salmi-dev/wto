@@ -27,6 +27,7 @@ setup() {
 	[[ "$output" == *"██╗    ██╗████████╗ ██████╗"* ]]
 	[[ "$output" == *"wto v$VERSION - WorkTree Organizer"* ]]
 	[[ "$output" == *"wto [status] [--format table|json]"* ]]
+	[[ "$output" == *"wto init [directory]"* ]]
 	[[ "$output" == *"wto new [-y] <branch>"* ]]
 	[[ "$output" == *"wto worktree version"* ]]
 	[[ "$output" == *"Status table icons"* ]]
@@ -52,7 +53,7 @@ setup() {
 
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"error Unknown worktree command: nope"* ]]
-	[[ "$output" == *"Worktree: wto worktree <status|new|create|tmux|version|close|agent>"* ]]
+	[[ "$output" == *"Worktree: wto worktree <status|init|new|create|tmux|version|close|agent>"* ]]
 	[[ "$output" != *"Structure:"* ]]
 }
 
@@ -84,6 +85,37 @@ make_managed_repo() {
 	git --git-dir="$managed/.bare" update-ref -d refs/heads/feature/status
 	git --git-dir="$managed/.bare" worktree add -b main "$managed/managed-main" origin/main >/dev/null
 	git --git-dir="$managed/.bare" worktree add -b feature/status "$managed/feature/status" origin/feature/status >/dev/null
+}
+
+@test "init creates a bare repo and an unborn main worktree in wto layout" {
+	tmp=$(mktemp -d)
+	target="$tmp/my-project"
+	mkdir -p "$target"
+	printf 'keep me\n' >"$target/existing.txt"
+
+	run env WTO_COLOR=never "$WTO" init "$target"
+
+	[ "$status" -eq 0 ]
+	[ -d "$target/.bare" ]
+	[ -f "$target/existing.txt" ]
+	[ -f "$target/my-project-main/.git" ]
+	[ "$(git --git-dir="$target/.bare" rev-parse --is-bare-repository)" = true ]
+	[ "$(git -C "$target/my-project-main" branch --show-current)" = main ]
+	[[ "$(git -C "$target/my-project-main" status --short --branch)" == *"No commits yet on main"* ]]
+}
+
+@test "init defaults to the current directory and refuses to replace an existing managed repo" {
+	tmp=$(mktemp -d)
+	cd "$tmp"
+	run env WTO_COLOR=never "$WTO" init
+
+	[ "$status" -eq 0 ]
+	[ -d "$tmp/.bare" ]
+	[ -d "$tmp/$(basename "$tmp")-main" ]
+
+	run env WTO_COLOR=never "$WTO" init
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Bare repository already exists"* ]]
 }
 
 @test "status is the default command and prints json when stdout is not a terminal" {

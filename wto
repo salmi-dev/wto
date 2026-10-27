@@ -85,6 +85,7 @@ ${BOLD}wto${RESET} ${DIM}v$VERSION${RESET} - WorkTree Organizer
 
 ${BOLD}Usage${RESET}:
   $PROGRAM [status] [--format table|json]
+  $PROGRAM init [directory]
   $PROGRAM clone [-y] <git-url> [directory]
   $PROGRAM new [-y] <branch>
   $PROGRAM create [-y] [--tmux|--no-tmux] [#<pr-number>|<branch>|main]
@@ -93,6 +94,7 @@ ${BOLD}Usage${RESET}:
   $PROGRAM close [#<pr-number>|<branch>|main] [-y] [-f]
   $PROGRAM agent
   $PROGRAM worktree status [--format table|json]
+  $PROGRAM worktree init [directory]
   $PROGRAM worktree new <branch> [--tmux|--no-tmux]
   $PROGRAM worktree create [#<pr-number>|<branch>|main] [--tmux|--no-tmux]
   $PROGRAM worktree tmux
@@ -126,8 +128,8 @@ usage_hint() {
 	cat >&2 <<EOF
 ${BOLD}Usage${RESET}: $PROGRAM <command> [options]
 
-${BOLD}Commands${RESET}: status, clone, new, create, tmux, version, close, agent
-${BOLD}Worktree${RESET}: $PROGRAM worktree <status|new|create|tmux|version|close|agent>
+${BOLD}Commands${RESET}: status, init, clone, new, create, tmux, version, close, agent
+${BOLD}Worktree${RESET}: $PROGRAM worktree <status|init|new|create|tmux|version|close|agent>
 
 Use '$PROGRAM agent' for agent-oriented, non-interactive usage.
 
@@ -1374,6 +1376,29 @@ unpushed_status() {
 	return 0
 }
 
+cmd_init() {
+	need_cmd git
+	[ "$#" -le 1 ] || die "Usage: $PROGRAM init [directory]"
+
+	target=${1:-.}
+	if [ ! -d "$target" ]; then
+		run_step "create target directory '$target'" mkdir -p "$target"
+	fi
+	base_dir=$(abs_dir "$target")
+	bare=$(bare_dir "$base_dir")
+	path=$(main_path "$base_dir")
+
+	[ ! -e "$bare" ] || die "Bare repository already exists: $bare"
+	[ ! -e "$path" ] || die "Main worktree path already exists: $path"
+
+	run_step "initialize bare repository at '$bare'" git init --bare --initial-branch=main "$bare"
+	run_step "configure origin fetch refspec" git --git-dir="$bare" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+	run_step "create main worktree at '$path'" git --git-dir="$bare" worktree add --orphan -b main "$path"
+
+	success "wto repository initialized at $(style "$BOLD" "$base_dir")"
+	success "main worktree created at $(style "$BOLD" "$path")"
+}
+
 cmd_clone() {
 	while [ "$#" -gt 0 ]; do
 		case $1 in
@@ -1634,6 +1659,7 @@ wto agent usage
 
 Run commands with explicit arguments so they do not need a terminal:
   $PROGRAM status --format json
+  $PROGRAM init <directory>
   $PROGRAM clone --yes <git-url> <directory>
   $PROGRAM new --yes <branch>
   $PROGRAM create --yes <branch|#PR|main> --tmux
@@ -1790,6 +1816,10 @@ main() {
 			shift
 			cmd_status "$@"
 			;;
+		init)
+			shift
+			cmd_init "$@"
+			;;
 		clone)
 			shift
 			cmd_clone "$@"
@@ -1832,6 +1862,10 @@ main() {
 				status)
 					shift
 					cmd_status "$@"
+					;;
+				init)
+					shift
+					cmd_init "$@"
 					;;
 				new)
 					shift
