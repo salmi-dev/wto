@@ -106,6 +106,13 @@ ${BOLD}Non-interactive options${RESET}:
   --tmux          Create a detached tmux session for new/create
   --no-tmux       Do not create a tmux session for new/create
 
+${BOLD}Status table icons${RESET}:
+  $(style "$GREEN" "✓")  Clean worktree
+  $(style "$YELLOW" "⚠")  Uncommitted changes
+  $(style "$RED" "✗")  Worktree path is missing
+  $(style "$YELLOW" "↑N") Commits ahead of its remote
+  $(style "$YELLOW" "↓N") Commits behind its remote
+
 ${BOLD}Structure${RESET}:
   <repo>/.bare
   <repo>/<repo>-main
@@ -649,9 +656,9 @@ status_table_compact() {
 		-v red="$RED" -v green="$GREEN" -v yellow="$YELLOW" \
 		-v blue="$BLUE" -v cyan="$CYAN" -v magenta="$MAGENTA" '
 		BEGIN {
-			headers[1] = "here"; headers[2] = "worktree"; headers[3] = "PR"
-			headers[4] = "tmux"; headers[5] = "state"; headers[6] = "ahead"; headers[7] = "behind"
-			for (i = 1; i <= 7; i++) width[i] = length(headers[i])
+			headers[1] = "here"; headers[2] = "worktree"
+			headers[3] = "PR"; headers[4] = "tmux"
+			for (i = 1; i <= 4; i++) width[i] = length(headers[i])
 		}
 		{
 			r = ++rows
@@ -665,18 +672,26 @@ status_table_compact() {
 				value[r,2,3] = "+ " branch
 			else
 				value[r,2,3] = ""
-			value[r,3] = $5; value[r,4] = $7; value[r,5] = $8
-			value[r,6] = $9; value[r,7] = $10
-			for (i = 1; i <= 7; i++) {
+			value[r,3] = $5; value[r,4] = $7
+			value[r,5] = $8; value[r,6] = $9; value[r,7] = $10
+			for (i = 1; i <= 4; i++) {
 				if (i == 2) {
-					for (j = 1; j <= 3; j++) if (length(value[r,i,j]) > width[i]) width[i] = length(value[r,i,j])
+					path_width = length(value[r,2,1]) + status_width(r)
+					if (path_width > width[i]) width[i] = path_width
+					for (j = 2; j <= 3; j++) if (length(value[r,i,j]) > width[i]) width[i] = length(value[r,i,j])
 				} else if (length(value[r,i]) > width[i]) width[i] = length(value[r,i])
 			}
+		}
+		function status_width(row,    width) {
+			width = 2
+			if (value[row,6] + 0 > 0) width += 2 + length(value[row,6])
+			if (value[row,7] + 0 > 0) width += 2 + length(value[row,7])
+			return width
 		}
 		function repeat(text, count,    out, i) { out=""; for (i=0; i<count; i++) out=out text; return out }
 		function border(left, middle, right,    i) {
 			printf "%s", left
-			for (i=1; i<=7; i++) { printf "%s", repeat("─", width[i]+2); printf "%s", (i==7 ? right : middle) }
+			for (i=1; i<=4; i++) { printf "%s", repeat("─", width[i]+2); printf "%s", (i==4 ? right : middle) }
 			printf "\n"
 		}
 		function color(col, text,    n) {
@@ -684,8 +699,6 @@ status_table_compact() {
 			if (col == 2) return text == value[current,2,2] ? blue : (text == value[current,2,3] ? yellow : cyan)
 			if (col == 3) return text == "-" ? dim : magenta
 			if (col == 4) return text == "-" ? dim : green
-			if (col == 5) return text == "clean" ? green : (text == "dirty" ? yellow : (text == "missing" ? red : dim))
-			if (col == 6 || col == 7) { n=text+0; return n > 0 ? yellow : dim }
 			return ""
 		}
 		function cell(col, text, row,    c, suffix, padding) {
@@ -700,15 +713,31 @@ status_table_compact() {
 			c=color(col,text)
 			printf " %s%-*s%s ", c, width[col], text, reset
 		}
-		function header_row(    i) { printf "│"; for(i=1;i<=7;i++) { printf " %s%-*s%s │", bold,width[i],headers[i],reset }; printf "\n" }
+		function worktree_cell(row,    state_color, state_glyph, padding) {
+			if (value[row,5] == "clean") {
+				state_color = green; state_glyph = "✓"
+			} else if (value[row,5] == "dirty") {
+				state_color = yellow; state_glyph = "⚠"
+			} else {
+				state_color = red; state_glyph = "✗"
+			}
+			printf " %s%s%s %s%s%s", cyan, value[row,2,1], reset, state_color, state_glyph, reset
+			if (value[row,6] + 0 > 0) printf " %s↑%s%s", yellow, value[row,6], reset
+			if (value[row,7] + 0 > 0) printf " %s↓%s%s", yellow, value[row,7], reset
+			padding = width[2] - length(value[row,2,1]) - status_width(row)
+			printf "%*s ", padding, ""
+		}
+		function header_row(    i) { printf "│"; for(i=1;i<=4;i++) { printf " %s%-*s%s │", bold,width[i],headers[i],reset }; printf "\n" }
 		function body_row(row,    h,i,line) {
 			for (h=1; h<=3; h++) {
 				if (h == 3 && value[row,2,3] == "") continue
 				current=row
 				printf "│"
 				cell(1, h==1 ? value[row,1] : "", row); printf "│"
-				line = value[row,2,h]; cell(2, line, row); printf "│"
-				for (i=3; i<=7; i++) { cell(i, h==1 ? value[row,i] : "", row); printf "│" }
+				if (h == 1) worktree_cell(row)
+				else { line = value[row,2,h]; cell(2, line, row) }
+				printf "│"
+				for (i=3; i<=4; i++) { cell(i, h==1 ? value[row,i] : "", row); printf "│" }
 				printf "\n"
 			}
 		}

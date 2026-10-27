@@ -29,6 +29,12 @@ setup() {
 	[[ "$output" == *"wto [status] [--format table|json]"* ]]
 	[[ "$output" == *"wto new [-y] <branch>"* ]]
 	[[ "$output" == *"wto worktree version"* ]]
+	[[ "$output" == *"Status table icons"* ]]
+	[[ "$output" == *"✓  Clean worktree"* ]]
+	[[ "$output" == *"⚠  Uncommitted changes"* ]]
+	[[ "$output" == *"✗  Worktree path is missing"* ]]
+	[[ "$output" == *"↑N Commits ahead"* ]]
+	[[ "$output" == *"↓N Commits behind"* ]]
 }
 
 @test "unknown command prints a clear error and compact hint" {
@@ -117,7 +123,78 @@ make_managed_repo() {
 	[[ "$output" == *"└"* ]]
 	[[ "$output" == *"managed-main"* ]]
 	[[ "$output" == *"feature/status"* ]]
-	[[ "$output" == *"origin/main"* ]]
+	[[ "$output" == *"-> origin/main"* ]]
+	[[ "$output" == *"-> origin/feature/status"* ]]
+
+	# Every table row must retain all five column boundaries and every line
+	# must have the same rendered width, including the multiline worktree rows.
+	printf '%s\n' "$output" | awk '
+		/^[┌│├└]/ {
+			line = $0
+			if (line ~ /^│/) {
+				count = gsub(/│/, "&", line)
+				if (count != 5) failed = 1
+				body++
+			}
+			if (line ~ /^├/) separators++
+			gsub("┌", "+", line); gsub("┬", "+", line); gsub("┐", "+", line)
+			gsub("├", "+", line); gsub("┼", "+", line); gsub("┤", "+", line)
+			gsub("└", "+", line); gsub("┴", "+", line); gsub("┘", "+", line)
+			gsub("─", "-", line); gsub("│", "|", line)
+			gsub("✓", "v", line); gsub("⚠", "!", line); gsub("✗", "x", line)
+			gsub("↑", "^", line); gsub("↓", "v", line)
+			if (width == 0) width = length(line)
+			if (length(line) != width) failed = 1
+		}
+		END { if (failed || body != 5 || separators != 2) exit 1 }
+	'
+}
+
+@test "status table shows dirty and ahead badges inline in the worktree column" {
+	tmp=$(mktemp -d)
+	make_managed_repo "$tmp"
+	git_dir=$(dirname "$(command -v git)")
+	worktree="$tmp/managed/feature/status"
+
+	printf 'ahead commit\n' >>"$worktree/feature.txt"
+	git -C "$worktree" add feature.txt
+	git -C "$worktree" commit -m ahead >/dev/null
+	printf 'uncommitted change\n' >>"$worktree/feature.txt"
+	git -C "$tmp/src" remote add origin "$tmp/origin.git"
+	printf 'remote advance\n' >"$tmp/src/remote.txt"
+	git -C "$tmp/src" add remote.txt
+	git -C "$tmp/src" commit -m remote >/dev/null
+	git -C "$tmp/src" push origin feature/status >/dev/null
+	git --git-dir="$tmp/managed/.bare" fetch origin >/dev/null 2>&1
+	cd "$tmp/managed"
+	run env WTO_COLOR=always PATH="$git_dir:/usr/bin:/bin" "$WTO" status --format table
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"feature/status "*$'\033[33m⚠\033[0m '*$'\033[33m↑1\033[0m '*$'\033[33m↓1\033[0m'* ]]
+	[[ "$output" != *"│ state "* ]]
+	[[ "$output" != *"│ ahead "* ]]
+	[[ "$output" != *"│ behind "* ]]
+}
+
+@test "status table distinguishes the remote prefix and divergent local branch with color" {
+	tmp=$(mktemp -d)
+	make_managed_repo "$tmp"
+	git_dir=$(dirname "$(command -v git)")
+	managed="$tmp/managed"
+
+	git --git-dir="$managed/.bare" worktree add -b local/status "$managed/local/status" origin/feature/status >/dev/null
+	git -C "$managed/local/status" branch --set-upstream-to=origin/feature/status >/dev/null
+	git --git-dir="$managed/.bare" worktree add -b missing/status "$managed/missing/status" origin/main >/dev/null
+	rm -rf "$managed/missing/status"
+	cd "$managed"
+	run env WTO_COLOR=always PATH="$git_dir:/usr/bin:/bin" "$WTO" status --format table
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *$'\033[32m✓\033[0m'* ]]
+	[[ "$output" == *$'\033[31m✗\033[0m'* ]]
+	[[ "$output" == *$'\033[34morigin/'* ]]
+	[[ "$output" == *$'\033[36mfeature/status\033[0m'* ]]
+	[[ "$output" == *$'\033[33m+ local/status'* ]]
 }
 
 @test "--format can force default status output without naming status" {
