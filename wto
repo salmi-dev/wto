@@ -3,7 +3,7 @@
 set -eu
 
 PROGRAM=${0##*/}
-VERSION=0.1.9
+VERSION=0.1.10
 
 RESET=
 BOLD=
