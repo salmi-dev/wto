@@ -144,6 +144,43 @@ In a terminal, the command prints the `wto` banner and version, then checks
 dependency availability and versions for `git`, `gh`, `fzf`, and optional
 `tmux`. When stdout is piped or redirected, it prints only the version number.
 
+## Development and AI Workflows
+
+The development tools are pinned in `mise.toml`. Install them with:
+
+```sh
+mise install
+```
+
+This provides the OpenSpec CLI, Pi, Bats, ShellCheck, and shfmt at the versions
+configured for the repository. Run the shell syntax check, ShellCheck, and Bats
+tests locally with:
+
+```sh
+sh -n wto
+shellcheck wto
+bats test
+```
+
+OpenSpec keeps active changes under `openspec/changes/`, shared specifications
+under `openspec/specs/`, and completed changes under
+`openspec/changes/archive/`. Useful commands include:
+
+```sh
+openspec list
+openspec validate --all
+```
+
+Pi users can invoke the project prompts as `/opsx-new`, `/opsx-continue`,
+`/opsx-apply`, `/opsx-verify`, `/opsx-sync`, `/opsx-archive`,
+`/opsx-bulk-archive`, `/opsx-propose`, `/opsx-ff`, `/opsx-explore`, and
+`/opsx-onboard`. Their detailed skill instructions live in `.pi/skills/`.
+
+GitHub Copilot has corresponding prompt and skill files in `.github/prompts/`
+and `.github/skills/`, plus an `@OpenSpec` custom agent in
+`.github/agents/`. The Copilot setup workflow installs OpenSpec CLI in the
+agent environment.
+
 ## CI/CD
 
 GitHub Actions runs shell validation on pushes to `main` and pull requests:
